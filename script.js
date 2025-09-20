@@ -670,15 +670,15 @@ class MIDIHumanizer {
   // Update button states during playback
   updatePlaybackButtons() {
     const playButtons = document.querySelectorAll('.play-button');
-    playButtons.forEach(button => {
+    playButtons.forEach((button, index) => {
       if (this.isPlaying) {
-        if (button.textContent.includes('オリジナル')) {
+        if (index === 0 || button.textContent.includes('オリジナル')) {
           button.textContent = this.isPlayingOriginal ? 'オリジナル停止' : 'オリジナル再生';
         } else {
           button.textContent = this.isPlayingHumanized ? 'ヒューマナイズ後停止' : 'ヒューマナイズ後再生';
         }
       } else {
-        if (button.textContent.includes('オリジナル') || button.textContent.includes('停止')) {
+        if (index === 0 || button.textContent.includes('オリジナル')) {
           button.textContent = 'オリジナル再生';
         } else {
           button.textContent = 'ヒューマナイズ後再生';
