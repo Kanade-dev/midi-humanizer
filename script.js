@@ -357,8 +357,11 @@ class MIDIHumanizer {
     // Set random seed for reproducibility
     this.rng = this.seedRandom(seed);
     
-    const humanizedTracks = midiData.tracks.map(track => 
-      this.humanizeTrack(track, style, intensity)
+    // Perform musical analysis for intelligent humanization
+    const musicalAnalysis = this.analyzeMusicStructure(midiData.tracks, style);
+    
+    const humanizedTracks = midiData.tracks.map((track, trackIndex) => 
+      this.humanizeTrack(track, style, intensity, musicalAnalysis.tracks[trackIndex])
     );
     
     return {
@@ -367,7 +370,7 @@ class MIDIHumanizer {
     };
   }
 
-  humanizeTrack(track, style, intensity) {
+  humanizeTrack(track, style, intensity, trackAnalysis = null) {
     const humanizedEvents = [];
     const noteOnEvents = [];
     
@@ -375,11 +378,11 @@ class MIDIHumanizer {
       const event = { ...track[i] };
       
       if (this.isNoteOn(event)) {
-        // Apply timing humanization
-        event.time = this.humanizeTiming(event.time, style, intensity);
+        // Apply intelligent timing humanization based on musical context
+        event.time = this.humanizeTimingIntelligent(event.time, event.data1, style, intensity, trackAnalysis, i);
         
-        // Apply velocity humanization
-        event.data2 = this.humanizeVelocity(event.data2, style, intensity, event.data1);
+        // Apply intelligent velocity humanization based on musical phrasing
+        event.data2 = this.humanizeVelocityIntelligent(event.data2, event.data1, style, intensity, trackAnalysis, i);
         
         noteOnEvents.push(event);
       } else if (this.isNoteOff(event)) {
@@ -392,8 +395,8 @@ class MIDIHumanizer {
           const noteOn = noteOnEvents[noteOnIndex];
           const duration = event.time - noteOn.time;
           
-          // Apply duration humanization
-          const humanizedDuration = this.humanizeDuration(duration, style, intensity);
+          // Apply intelligent duration humanization
+          const humanizedDuration = this.humanizeDurationIntelligent(duration, event.data1, style, intensity, trackAnalysis, i);
           event.time = noteOn.time + humanizedDuration;
           
           noteOnEvents.splice(noteOnIndex, 1);
@@ -476,6 +479,399 @@ class MIDIHumanizer {
     };
     
     return variations[style] || variations.pop;
+  }
+
+  // Musical Analysis Functions for Intelligent Humanization
+  analyzeMusicStructure(tracks, style) {
+    const analysis = {
+      tracks: [],
+      globalTempo: 120,
+      timeSignature: [4, 4]
+    };
+
+    tracks.forEach(track => {
+      const trackAnalysis = {
+        chords: this.analyzeChordProgression(track),
+        melody: this.analyzeMelody(track),
+        rhythm: this.analyzeRhythmicContext(track, style),
+        phrasing: this.identifyPhraseBoundaries(track),
+        dynamics: this.analyzeDynamicStructure(track)
+      };
+      analysis.tracks.push(trackAnalysis);
+    });
+
+    return analysis;
+  }
+
+  analyzeChordProgression(track) {
+    const chords = [];
+    const simultaneousNotes = {};
+    
+    // Group simultaneous notes to identify chords
+    track.forEach(event => {
+      if (this.isNoteOn(event)) {
+        const time = Math.floor(event.time / 96); // Quantize to beat level
+        if (!simultaneousNotes[time]) simultaneousNotes[time] = [];
+        simultaneousNotes[time].push(event.data1 % 12); // Get pitch class
+      }
+    });
+
+    // Analyze chord qualities and progressions
+    Object.keys(simultaneousNotes).forEach(time => {
+      const notes = [...new Set(simultaneousNotes[time])].sort();
+      if (notes.length >= 3) {
+        chords.push({
+          time: parseInt(time),
+          notes: notes,
+          quality: this.identifyChordQuality(notes),
+          tension: this.calculateHarmonicTension(notes)
+        });
+      }
+    });
+
+    return chords;
+  }
+
+  identifyChordQuality(notes) {
+    // Simple chord identification (major, minor, dominant, etc.)
+    const intervals = [];
+    for (let i = 1; i < notes.length; i++) {
+      intervals.push((notes[i] - notes[0] + 12) % 12);
+    }
+    
+    if (intervals.includes(4) && intervals.includes(7)) return 'major';
+    if (intervals.includes(3) && intervals.includes(7)) return 'minor';
+    if (intervals.includes(4) && intervals.includes(7) && intervals.includes(10)) return 'dominant';
+    if (intervals.includes(3) && intervals.includes(6)) return 'diminished';
+    return 'other';
+  }
+
+  calculateHarmonicTension(notes) {
+    // Calculate dissonance level based on intervals
+    let tension = 0;
+    for (let i = 0; i < notes.length; i++) {
+      for (let j = i + 1; j < notes.length; j++) {
+        const interval = (notes[j] - notes[i]) % 12;
+        // Dissonant intervals get higher tension scores
+        if ([1, 2, 6, 10, 11].includes(interval)) tension += 0.5;
+        if ([1, 11].includes(interval)) tension += 0.3; // Minor 2nd/Major 7th
+      }
+    }
+    return Math.min(1.0, tension / notes.length);
+  }
+
+  analyzeMelody(track) {
+    const melodyNotes = [];
+    
+    // Extract melodic line (highest notes typically)
+    track.forEach(event => {
+      if (this.isNoteOn(event)) {
+        melodyNotes.push({
+          time: event.time,
+          pitch: event.data1,
+          velocity: event.data2
+        });
+      }
+    });
+
+    // Identify melodic peaks and phrases
+    const peaks = [];
+    const valleys = [];
+    
+    for (let i = 1; i < melodyNotes.length - 1; i++) {
+      const prev = melodyNotes[i - 1].pitch;
+      const curr = melodyNotes[i].pitch;
+      const next = melodyNotes[i + 1].pitch;
+      
+      if (curr > prev && curr > next) {
+        peaks.push({ index: i, intensity: curr - Math.min(prev, next) });
+      }
+      if (curr < prev && curr < next) {
+        valleys.push({ index: i, intensity: Math.max(prev, next) - curr });
+      }
+    }
+
+    return {
+      notes: melodyNotes,
+      peaks: peaks,
+      valleys: valleys,
+      range: this.calculateMelodicRange(melodyNotes),
+      contour: this.analyzeMelodicContour(melodyNotes)
+    };
+  }
+
+  calculateMelodicRange(notes) {
+    if (notes.length === 0) return 0;
+    const pitches = notes.map(n => n.pitch);
+    return Math.max(...pitches) - Math.min(...pitches);
+  }
+
+  analyzeMelodicContour(notes) {
+    const contour = [];
+    for (let i = 1; i < notes.length; i++) {
+      const diff = notes[i].pitch - notes[i - 1].pitch;
+      if (diff > 0) contour.push('up');
+      else if (diff < 0) contour.push('down');
+      else contour.push('same');
+    }
+    return contour;
+  }
+
+  analyzeRhythmicContext(track, style) {
+    const beats = {};
+    const beatStrength = [1.0, 0.5, 0.75, 0.5]; // 4/4 beat strengths
+    
+    track.forEach(event => {
+      if (this.isNoteOn(event)) {
+        const beat = Math.floor((event.time / 96) % 4);
+        const subbeat = (event.time / 24) % 4;
+        
+        if (!beats[beat]) beats[beat] = { count: 0, offbeat: 0 };
+        beats[beat].count++;
+        
+        // Detect syncopation (notes on weak subdivisions)
+        if (subbeat % 1 !== 0) beats[beat].offbeat++;
+      }
+    });
+
+    return {
+      beats: beats,
+      syncopation: this.calculateSyncopationLevel(beats),
+      groove: this.identifyGroovePattern(beats, style)
+    };
+  }
+
+  calculateSyncopationLevel(beats) {
+    let total = 0;
+    let offbeat = 0;
+    
+    Object.values(beats).forEach(beat => {
+      total += beat.count;
+      offbeat += beat.offbeat;
+    });
+    
+    return total > 0 ? offbeat / total : 0;
+  }
+
+  identifyGroovePattern(beats, style) {
+    // Style-specific groove identification
+    const patterns = {
+      jazz: { swing: true, emphasis: [0, 2] },
+      classical: { swing: false, emphasis: [0] },
+      pop: { swing: false, emphasis: [0, 2] }
+    };
+    
+    return patterns[style] || patterns.pop;
+  }
+
+  identifyPhraseBoundaries(track) {
+    const phrases = [];
+    let currentPhrase = { start: 0, end: 0, notes: [] };
+    
+    // Detect phrase boundaries based on rests and melodic patterns
+    let lastTime = 0;
+    
+    track.forEach((event, index) => {
+      if (this.isNoteOn(event)) {
+        const gap = event.time - lastTime;
+        
+        // Large gap indicates phrase boundary
+        if (gap > 192 && currentPhrase.notes.length > 0) { // Half note gap
+          currentPhrase.end = lastTime;
+          phrases.push({ ...currentPhrase });
+          currentPhrase = { start: event.time, end: event.time, notes: [] };
+        }
+        
+        currentPhrase.notes.push(event);
+        lastTime = event.time;
+      }
+    });
+    
+    if (currentPhrase.notes.length > 0) {
+      currentPhrase.end = lastTime;
+      phrases.push(currentPhrase);
+    }
+    
+    return phrases;
+  }
+
+  analyzeDynamicStructure(track) {
+    const dynamics = [];
+    let velocitySum = 0;
+    let noteCount = 0;
+    
+    track.forEach(event => {
+      if (this.isNoteOn(event)) {
+        velocitySum += event.data2;
+        noteCount++;
+        
+        // Analyze local dynamics in windows
+        const windowStart = Math.max(0, noteCount - 8);
+        const recentVelocities = track.slice(windowStart, noteCount)
+          .filter(e => this.isNoteOn(e))
+          .map(e => e.data2);
+        
+        const avgVelocity = recentVelocities.reduce((a, b) => a + b, 0) / recentVelocities.length;
+        const variance = recentVelocities.reduce((acc, v) => acc + Math.pow(v - avgVelocity, 2), 0) / recentVelocities.length;
+        
+        dynamics.push({
+          time: event.time,
+          velocity: event.data2,
+          localAverage: avgVelocity,
+          variance: variance,
+          trend: this.calculateVelocityTrend(recentVelocities)
+        });
+      }
+    });
+    
+    return dynamics;
+  }
+
+  calculateVelocityTrend(velocities) {
+    if (velocities.length < 3) return 0;
+    
+    const first = velocities.slice(0, Math.floor(velocities.length / 2));
+    const second = velocities.slice(Math.floor(velocities.length / 2));
+    
+    const firstAvg = first.reduce((a, b) => a + b, 0) / first.length;
+    const secondAvg = second.reduce((a, b) => a + b, 0) / second.length;
+    
+    return (secondAvg - firstAvg) / 127; // Normalize to -1 to 1
+  }
+
+  // Intelligent Humanization Functions
+  humanizeTimingIntelligent(time, note, style, intensity, analysis, eventIndex) {
+    let adjustment = this.humanizeTiming(time, style, intensity) - time; // Get base adjustment
+    
+    if (!analysis) return time + adjustment;
+    
+    // Apply phrase-aware timing
+    const phrase = analysis.phrasing.find(p => 
+      time >= p.start && time <= p.end
+    );
+    
+    if (phrase) {
+      const phrasePosition = (time - phrase.start) / (phrase.end - phrase.start);
+      
+      // Subtle ritardando at phrase ends
+      if (phrasePosition > 0.8) {
+        adjustment += intensity * 5 * phrasePosition;
+      }
+      
+      // Accelerando through phrase climax
+      if (phrasePosition > 0.3 && phrasePosition < 0.7) {
+        adjustment -= intensity * 2;
+      }
+    }
+    
+    // Apply chord-based timing adjustments
+    const nearbyChord = analysis.chords.find(c => 
+      Math.abs(c.time - time / 96) < 2
+    );
+    
+    if (nearbyChord && nearbyChord.tension > 0.5) {
+      // Slight hesitation before tense harmonies
+      adjustment += intensity * nearbyChord.tension * 3;
+    }
+    
+    // Style-specific timing adjustments
+    if (style === 'jazz' && analysis.rhythm.groove.swing) {
+      const beat = (time / 48) % 2;
+      if (beat >= 1) {
+        adjustment += intensity * 8; // Swing eighth notes
+      }
+    }
+    
+    return Math.max(0, time + adjustment);
+  }
+
+  humanizeVelocityIntelligent(velocity, note, style, intensity, analysis, eventIndex) {
+    let adjustment = this.humanizeVelocity(velocity, style, intensity, note) - velocity;
+    
+    if (!analysis) return Math.max(1, Math.min(127, velocity + adjustment));
+    
+    // Apply melodic peak emphasis
+    const melodyNote = analysis.melody.notes.find(m => 
+      Math.abs(m.time - eventIndex * 10) < 50 && m.pitch === note
+    );
+    
+    if (melodyNote) {
+      const peak = analysis.melody.peaks.find(p => 
+        Math.abs(analysis.melody.notes[p.index].time - melodyNote.time) < 96
+      );
+      
+      if (peak) {
+        // Emphasize melodic peaks
+        adjustment += intensity * peak.intensity * 0.3;
+      }
+    }
+    
+    // Apply harmonic tension-based dynamics
+    const nearbyChord = analysis.chords.find(c => 
+      Math.abs(c.time - eventIndex / 10) < 2
+    );
+    
+    if (nearbyChord) {
+      if (nearbyChord.quality === 'dominant') {
+        adjustment += intensity * 8; // Emphasize dominant chords
+      } else if (nearbyChord.tension > 0.6) {
+        adjustment += intensity * nearbyChord.tension * 10;
+      }
+    }
+    
+    // Apply phrase-based dynamics
+    const phrase = analysis.phrasing.find(p => 
+      eventIndex * 10 >= p.start && eventIndex * 10 <= p.end
+    );
+    
+    if (phrase) {
+      const phrasePosition = (eventIndex * 10 - phrase.start) / (phrase.end - phrase.start);
+      
+      // Crescendo toward phrase middle, diminuendo at end
+      if (phrasePosition < 0.6) {
+        adjustment += intensity * phrasePosition * 8;
+      } else {
+        adjustment -= intensity * (phrasePosition - 0.6) * 12;
+      }
+    }
+    
+    return Math.max(1, Math.min(127, velocity + adjustment));
+  }
+
+  humanizeDurationIntelligent(duration, note, style, intensity, analysis, eventIndex) {
+    let adjustment = this.humanizeDuration(duration, style, intensity) - duration;
+    
+    if (!analysis) return Math.max(1, duration + adjustment);
+    
+    // Apply phrase-aware duration adjustments
+    const phrase = analysis.phrasing.find(p => 
+      eventIndex * 10 >= p.start && eventIndex * 10 <= p.end
+    );
+    
+    if (phrase) {
+      const phrasePosition = (eventIndex * 10 - phrase.start) / (phrase.end - phrase.start);
+      
+      // Lengthen notes at phrase endings
+      if (phrasePosition > 0.85) {
+        adjustment += duration * intensity * 0.2;
+      }
+      
+      // Slightly shorten notes in busy passages
+      if (phrase.notes.length > 20) {
+        adjustment -= duration * intensity * 0.1;
+      }
+    }
+    
+    // Style-specific duration adjustments
+    if (style === 'classical') {
+      // More legato in classical style
+      adjustment += duration * intensity * 0.05;
+    } else if (style === 'jazz') {
+      // More detached in jazz
+      adjustment -= duration * intensity * 0.1;
+    }
+    
+    return Math.max(1, duration + adjustment);
   }
 
   // Utility functions
