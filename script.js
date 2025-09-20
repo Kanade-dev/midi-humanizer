@@ -360,9 +360,15 @@ class MIDIHumanizer {
     // Perform musical analysis for intelligent humanization
     const musicalAnalysis = this.analyzeMusicStructure(midiData.tracks, style);
     
+    // Store analysis for visualization
+    this.lastAnalysis = musicalAnalysis;
+    
     const humanizedTracks = midiData.tracks.map((track, trackIndex) => 
       this.humanizeTrack(track, style, intensity, musicalAnalysis.tracks[trackIndex])
     );
+    
+    // Display analysis results
+    this.displayAnalysisResults(musicalAnalysis, style);
     
     return {
       ...midiData,
@@ -1061,6 +1067,150 @@ class MIDIHumanizer {
     `;
     
     container.insertBefore(playbackSection, container.firstChild);
+  }
+
+  displayAnalysisResults(analysis, style) {
+    const analysisDiv = document.getElementById('analysis');
+    const analysisContent = document.getElementById('analysisContent');
+    
+    // Clear previous analysis
+    analysisContent.innerHTML = '';
+    
+    // Show analysis section
+    analysisDiv.classList.remove('hidden');
+    
+    // Create analysis summary
+    const summaryHtml = this.createAnalysisSummary(analysis, style);
+    analysisContent.innerHTML = summaryHtml;
+  }
+
+  createAnalysisSummary(analysis, style) {
+    let html = '';
+    
+    // Process each track's analysis
+    analysis.tracks.forEach((trackAnalysis, trackIndex) => {
+      if (trackAnalysis.chords.length === 0 && trackAnalysis.melody.notes.length === 0) return;
+      
+      html += `<div class="track-analysis">`;
+      html += `<h4>🎵 Track ${trackIndex + 1} Analysis</h4>`;
+      
+      // Chord Progression Analysis
+      if (trackAnalysis.chords.length > 0) {
+        html += `<div class="analysis-section chord-progression">`;
+        html += `<h4>🎼 コード進行 (Chord Progression)</h4>`;
+        html += `<div class="chord-list">`;
+        
+        trackAnalysis.chords.forEach(chord => {
+          const tensionClass = chord.tension > 0.6 ? 'tension-high' : 
+                              chord.tension > 0.3 ? 'tension-medium' : '';
+          html += `<span class="chord-item ${tensionClass}" title="Tension: ${chord.tension.toFixed(2)}">${chord.quality}</span>`;
+        });
+        
+        html += `</div>`;
+        html += `<p><small>緊張度: 🔴高 🟡中 🔵低 | 検出コード数: ${trackAnalysis.chords.length}</small></p>`;
+        html += `</div>`;
+      }
+      
+      // Melody Analysis
+      if (trackAnalysis.melody.notes.length > 0) {
+        html += `<div class="analysis-section melody-analysis">`;
+        html += `<h4>🎵 メロディー分析 (Melodic Analysis)</h4>`;
+        
+        // Melody peaks
+        if (trackAnalysis.melody.peaks.length > 0) {
+          html += `<p><strong>フレーズ頂点:</strong> `;
+          trackAnalysis.melody.peaks.forEach(peak => {
+            html += `<span class="melody-peak">Peak ${peak.intensity}</span>`;
+          });
+          html += `</p>`;
+        }
+        
+        // Stats
+        html += `<div class="stats-grid">`;
+        html += `<div class="stat-item">`;
+        html += `<div class="stat-value">${trackAnalysis.melody.range}</div>`;
+        html += `<div class="stat-label">音域 (semitones)</div>`;
+        html += `</div>`;
+        html += `<div class="stat-item">`;
+        html += `<div class="stat-value">${trackAnalysis.melody.notes.length}</div>`;
+        html += `<div class="stat-label">メロディー音符数</div>`;
+        html += `</div>`;
+        html += `<div class="stat-item">`;
+        html += `<div class="stat-value">${trackAnalysis.melody.peaks.length}</div>`;
+        html += `<div class="stat-label">頂点数</div>`;
+        html += `</div>`;
+        html += `</div>`;
+        html += `</div>`;
+      }
+      
+      // Phrase Structure Analysis
+      if (trackAnalysis.phrasing.length > 0) {
+        html += `<div class="analysis-section phrase-structure">`;
+        html += `<h4>🎭 フレーズ構造 (Phrase Structure)</h4>`;
+        html += `<p>`;
+        trackAnalysis.phrasing.forEach((phrase, index) => {
+          const duration = ((phrase.end - phrase.start) / 96).toFixed(1);
+          html += `<span class="phrase-item">Phrase ${index + 1} (${duration}beats, ${phrase.notes.length}notes)</span>`;
+        });
+        html += `</p>`;
+        html += `<p><small>検出フレーズ数: ${trackAnalysis.phrasing.length}</small></p>`;
+        html += `</div>`;
+      }
+      
+      // Rhythm Analysis
+      if (trackAnalysis.rhythm) {
+        html += `<div class="analysis-section rhythm-analysis">`;
+        html += `<h4>🥁 リズム分析 (Rhythmic Analysis)</h4>`;
+        html += `<div class="stats-grid">`;
+        html += `<div class="stat-item">`;
+        html += `<div class="stat-value">${(trackAnalysis.rhythm.syncopation * 100).toFixed(1)}%</div>`;
+        html += `<div class="stat-label">シンコペーション度</div>`;
+        html += `</div>`;
+        html += `<div class="stat-item">`;
+        html += `<div class="stat-value">${style}</div>`;
+        html += `<div class="stat-label">適用スタイル</div>`;
+        html += `</div>`;
+        if (trackAnalysis.rhythm.groove) {
+          html += `<div class="stat-item">`;
+          html += `<div class="stat-value">${trackAnalysis.rhythm.groove.swing ? 'スウィング' : 'ストレート'}</div>`;
+          html += `<div class="stat-label">グルーヴタイプ</div>`;
+          html += `</div>`;
+        }
+        html += `</div>`;
+        html += `</div>`;
+      }
+      
+      html += `</div>`; // Close track-analysis
+    });
+    
+    // Overall analysis summary
+    html += `<div class="analysis-section">`;
+    html += `<h4>📊 総合分析結果 (Overall Analysis)</h4>`;
+    html += `<p>この楽曲は<strong>${style}</strong>スタイルとして分析され、以下の特徴に基づいてヒューマナイズされました：</p>`;
+    html += `<ul>`;
+    
+    switch(style) {
+      case 'classical':
+        html += `<li>✨ クラシカルな演奏表現：フレーズ構造に基づく自然なルバート</li>`;
+        html += `<li>🎼 和声進行の緊張感に応じた表現力調整</li>`;
+        html += `<li>🎵 対位法的声部における独立性重視</li>`;
+        break;
+      case 'jazz':
+        html += `<li>🎷 ジャズスタイル：スウィング感の自動適用</li>`;
+        html += `<li>🎶 シンコペーションの強調とグルーヴ感</li>`;
+        html += `<li>🎹 ブルーノートでの特別な扱い</li>`;
+        break;
+      case 'pop':
+        html += `<li>🎤 ポップス演奏：ビート感重視のタイミング調整</li>`;
+        html += `<li>🎸 コード進行のポップ感強化</li>`;
+        html += `<li>🎵 メロディアスなフレーズでの歌唱性重視</li>`;
+        break;
+    }
+    
+    html += `</ul>`;
+    html += `</div>`;
+    
+    return html;
   }
 
   // Update button states during playback

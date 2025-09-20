@@ -179,6 +179,126 @@ button:disabled {
   transform: translateY(-2px);
 }
 
+.analysis {
+  background: white;
+  padding: 2rem;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  margin-bottom: 2rem;
+}
+
+.analysis h3 {
+  margin-top: 0;
+  color: var(--primary-color);
+  text-align: center;
+  border-bottom: 2px solid var(--secondary-color);
+  padding-bottom: 1rem;
+}
+
+.analysis-section {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border-radius: 8px;
+  border-left: 4px solid var(--secondary-color);
+}
+
+.analysis-section h4 {
+  margin-top: 0;
+  color: var(--primary-color);
+  font-size: 1.1rem;
+}
+
+.chord-progression {
+  background: #e8f5e8;
+  border-left-color: #27ae60;
+}
+
+.melody-analysis {
+  background: #e8f4fd;
+  border-left-color: #3498db;
+}
+
+.phrase-structure {
+  background: #fdf2e8;
+  border-left-color: #f39c12;
+}
+
+.rhythm-analysis {
+  background: #f8e8fd;
+  border-left-color: #9b59b6;
+}
+
+.chord-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.chord-item {
+  background: var(--secondary-color);
+  color: white;
+  padding: 0.3rem 0.8rem;
+  border-radius: 15px;
+  font-size: 0.9rem;
+  font-weight: bold;
+}
+
+.chord-item.tension-high {
+  background: var(--accent-color);
+}
+
+.chord-item.tension-medium {
+  background: #f39c12;
+}
+
+.melody-peak {
+  display: inline-block;
+  background: #e74c3c;
+  color: white;
+  padding: 0.2rem 0.5rem;
+  border-radius: 10px;
+  margin: 0.2rem;
+  font-size: 0.8rem;
+}
+
+.phrase-item {
+  background: #f39c12;
+  color: white;
+  padding: 0.3rem 0.8rem;
+  border-radius: 15px;
+  margin: 0.3rem;
+  display: inline-block;
+  font-size: 0.9rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.stat-item {
+  text-align: center;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--secondary-color);
+}
+
+.stat-label {
+  font-size: 0.9rem;
+  color: #6c757d;
+  margin-top: 0.5rem;
+}
+
 .playback-section {
   background: #f8f9fa;
   padding: 1.5rem;
