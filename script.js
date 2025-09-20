@@ -7,8 +7,16 @@ class MIDIHumanizer {
     this.humanizedMidiData = null;
     this.isProcessing = false;
     
+    // Audio playback properties
+    this.audioContext = null;
+    this.currentPlayback = null;
+    this.isPlaying = false;
+    this.isPlayingOriginal = false;
+    this.isPlayingHumanized = false;
+    
     this.initializeEventListeners();
     this.setupIntensitySlider();
+    this.initializeAudio();
   }
 
   initializeEventListeners() {
@@ -26,6 +34,160 @@ class MIDIHumanizer {
     intensitySlider.addEventListener('input', (e) => {
       intensityValue.textContent = e.target.value;
     });
+  }
+
+  initializeAudio() {
+    try {
+      // Initialize AudioContext for MIDI playback
+      this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (error) {
+      console.warn('Web Audio API not supported:', error);
+    }
+  }
+
+  // Simple synthesizer for MIDI note playback
+  createNoteOscillator(frequency, velocity = 64, duration = 1000) {
+    if (!this.audioContext) return null;
+
+    const oscillator = this.audioContext.createOscillator();
+    const gainNode = this.audioContext.createGain();
+    
+    // Configure oscillator for piano-like sound
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
+    
+    // Configure volume based on MIDI velocity
+    const volume = Math.max(0.1, Math.min(0.8, velocity / 127 * 0.6));
+    gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+    gainNode.gain.linearRampToValueAtTime(volume, this.audioContext.currentTime + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(volume * 0.3, this.audioContext.currentTime + duration / 1000 * 0.3);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration / 1000);
+    
+    // Connect audio nodes
+    oscillator.connect(gainNode);
+    gainNode.connect(this.audioContext.destination);
+    
+    return { oscillator, gainNode };
+  }
+
+  // Convert MIDI note number to frequency
+  midiNoteToFrequency(midiNote) {
+    return 440 * Math.pow(2, (midiNote - 69) / 12);
+  }
+
+  // Stop current playback
+  stopPlayback() {
+    if (this.currentPlayback) {
+      this.currentPlayback.forEach(timeout => clearTimeout(timeout));
+      this.currentPlayback = [];
+    }
+    this.isPlaying = false;
+    this.updatePlaybackButtons();
+  }
+
+  // Play MIDI data using Web Audio API
+  async playMIDIData(midiData, isOriginal = true) {
+    if (!this.audioContext) {
+      alert('Web Audio APIがサポートされていません。ブラウザを更新してお試しください。');
+      return;
+    }
+
+    if (this.isPlaying) {
+      this.stopPlayback();
+      return;
+    }
+
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
+
+    this.isPlaying = true;
+    this.currentPlayback = [];
+    this.updatePlaybackButtons();
+
+    console.log(`Playing ${isOriginal ? 'original' : 'humanized'} MIDI...`);
+
+    try {
+      // Process all tracks
+      let maxTime = 0;
+      const tempo = 120; // Default tempo (BPM)
+      const division = midiData.header.division || 96; // Ticks per quarter note
+      
+      midiData.tracks.forEach((track, trackIndex) => {
+        let activeNotes = new Map(); // Track active notes for note-off events
+        
+        track.forEach(event => {
+          // Convert MIDI ticks to milliseconds
+          const realTime = (event.time / division) * (60000 / tempo);
+          
+          if (event.status >= 0x80 && event.status <= 0x9F) { // Note events
+            const isNoteOn = (event.status & 0xF0) === 0x90 && event.data2 > 0;
+            const isNoteOff = (event.status & 0xF0) === 0x80 || ((event.status & 0xF0) === 0x90 && event.data2 === 0);
+            
+            if (isNoteOn) {
+              const noteNumber = event.data1;
+              const velocity = event.data2;
+              const frequency = this.midiNoteToFrequency(noteNumber);
+              
+              const timeout = setTimeout(() => {
+                if (this.isPlaying) {
+                  const noteData = this.createNoteOscillator(frequency, velocity, 500);
+                  if (noteData) {
+                    noteData.oscillator.start();
+                    activeNotes.set(noteNumber, noteData);
+                    
+                    // Auto-stop note after duration if no explicit note-off
+                    setTimeout(() => {
+                      if (activeNotes.has(noteNumber)) {
+                        const note = activeNotes.get(noteNumber);
+                        try {
+                          note.oscillator.stop();
+                        } catch (e) {
+                          // Note may already be stopped
+                        }
+                        activeNotes.delete(noteNumber);
+                      }
+                    }, 500);
+                  }
+                }
+              }, Math.max(0, realTime));
+              
+              this.currentPlayback.push(timeout);
+            } else if (isNoteOff) {
+              const noteNumber = event.data1;
+              
+              const timeout = setTimeout(() => {
+                if (activeNotes.has(noteNumber)) {
+                  const note = activeNotes.get(noteNumber);
+                  try {
+                    note.oscillator.stop();
+                  } catch (e) {
+                    // Note may already be stopped
+                  }
+                  activeNotes.delete(noteNumber);
+                }
+              }, Math.max(0, realTime));
+              
+              this.currentPlayback.push(timeout);
+            }
+          }
+          
+          maxTime = Math.max(maxTime, realTime);
+        });
+      });
+
+      // Auto-stop playback after all notes
+      const stopTimeout = setTimeout(() => {
+        this.stopPlayback();
+      }, maxTime + 1000);
+      
+      this.currentPlayback.push(stopTimeout);
+      
+    } catch (error) {
+      console.error('Error during MIDI playback:', error);
+      this.stopPlayback();
+      alert('再生中にエラーが発生しました。');
+    }
   }
 
   async handleFormSubmit(e) {
@@ -505,14 +667,46 @@ class MIDIHumanizer {
     container.insertBefore(playbackSection, container.firstChild);
   }
 
+  // Update button states during playback
+  updatePlaybackButtons() {
+    const playButtons = document.querySelectorAll('.play-button');
+    playButtons.forEach(button => {
+      if (this.isPlaying) {
+        if (button.textContent.includes('オリジナル')) {
+          button.textContent = this.isPlayingOriginal ? 'オリジナル停止' : 'オリジナル再生';
+        } else {
+          button.textContent = this.isPlayingHumanized ? 'ヒューマナイズ後停止' : 'ヒューマナイズ後再生';
+        }
+      } else {
+        if (button.textContent.includes('オリジナル') || button.textContent.includes('停止')) {
+          button.textContent = 'オリジナル再生';
+        } else {
+          button.textContent = 'ヒューマナイズ後再生';
+        }
+      }
+    });
+  }
+
   async playOriginal() {
-    console.log('Playing original MIDI...');
-    alert('オリジナルMIDIの再生機能は実装中です。ダウンロードしたファイルでご確認ください。');
+    if (!this.originalMidiData) {
+      alert('オリジナルのMIDIデータが見つかりません。ファイルを再度アップロードしてください。');
+      return;
+    }
+    
+    this.isPlayingOriginal = true;
+    this.isPlayingHumanized = false;
+    await this.playMIDIData(this.originalMidiData, true);
   }
 
   async playHumanized() {
-    console.log('Playing humanized MIDI...');
-    alert('ヒューマナイズされたMIDIの再生機能は実装中です。ダウンロードしたファイルでご確認ください。');
+    if (!this.humanizedMidiData) {
+      alert('ヒューマナイズされたMIDIデータが見つかりません。処理を完了してからお試しください。');
+      return;
+    }
+    
+    this.isPlayingOriginal = false;
+    this.isPlayingHumanized = true;
+    await this.playMIDIData(this.humanizedMidiData, false);
   }
 
   showProcessing() {
