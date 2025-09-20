@@ -1,0 +1,21 @@
+# Development files
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Node modules (if using npm in future)
+node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
