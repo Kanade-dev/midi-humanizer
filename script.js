@@ -53,6 +53,10 @@ class MIDIHumanizer {
   createPianoNote(frequency, velocity = 64, startTime, duration = 1000) {
     if (!this.audioContext) return null;
 
+    // Calculate timing values first
+    const noteDuration = duration / 1000;
+    const releaseTime = Math.max(1.5, noteDuration * 0.6); // Longer release, minimum 1.5 seconds
+
     // Create multiple oscillators for richer piano-like sound
     const fundamental = this.audioContext.createOscillator();
     const harmonic2 = this.audioContext.createOscillator();
@@ -65,11 +69,13 @@ class MIDIHumanizer {
     const masterGain = this.audioContext.createGain();
     
     // Track all nodes for cleanup
+    const totalDuration = Math.max(noteDuration * 0.7, 0.3) + releaseTime + 0.1;
+    
     const nodes = {
       oscillators: [fundamental, harmonic2, harmonic3], 
       gains: [fundamentalGain, harmonic2Gain, harmonic3Gain, masterGain],
       startTime: startTime,
-      endTime: startTime + duration / 1000 + 0.1
+      endTime: startTime + totalDuration
     };
     this.activeAudioNodes.push(nodes);
     
@@ -89,15 +95,18 @@ class MIDIHumanizer {
     harmonic3Gain.gain.setValueAtTime(baseVolume * 0.1, startTime);
     
     // Create realistic piano envelope (ADSR)
-    const attackTime = 0.01;
-    const decayTime = duration / 1000 * 0.2;
-    const sustainLevel = baseVolume * 0.6;
-    const releaseTime = duration / 1000 * 0.8;
+    const attackTime = 0.01; // Quick attack for piano
+    const decayTime = 0.1; // Fixed decay time for consistent piano sound
+    const sustainLevel = baseVolume * 0.7; // Higher sustain level
     
     masterGain.gain.setValueAtTime(0, startTime);
     masterGain.gain.linearRampToValueAtTime(baseVolume, startTime + attackTime);
     masterGain.gain.exponentialRampToValueAtTime(sustainLevel, startTime + attackTime + decayTime);
-    masterGain.gain.exponentialRampToValueAtTime(0.001, startTime + duration / 1000);
+    
+    // Piano-like natural decay: hold sustain level during note, then slow release
+    const releaseStart = startTime + Math.max(noteDuration * 0.7, 0.3); // Start release before note ends
+    masterGain.gain.exponentialRampToValueAtTime(sustainLevel, releaseStart);
+    masterGain.gain.exponentialRampToValueAtTime(0.001, releaseStart + releaseTime);
     
     // Connect the audio graph
     fundamental.connect(fundamentalGain);
@@ -114,9 +123,10 @@ class MIDIHumanizer {
     harmonic2.start(startTime);
     harmonic3.start(startTime);
     
-    fundamental.stop(startTime + duration / 1000 + 0.1);
-    harmonic2.stop(startTime + duration / 1000 + 0.1);
-    harmonic3.stop(startTime + duration / 1000 + 0.1);
+    // Stop oscillators after the complete envelope (including release)
+    fundamental.stop(startTime + totalDuration);
+    harmonic2.stop(startTime + totalDuration);
+    harmonic3.stop(startTime + totalDuration);
     
     return nodes;
   }
@@ -1096,13 +1106,17 @@ class MIDIHumanizer {
     // Apply intelligent post-processing to merge fragmented phrases
     const improvedPhrases = this.mergeFragmentedPhrases(rawPhrases, grid);
     
+    // Second pass: Create measure-aligned phrases instead of merging
+    const measureBasedPhrases = this.createMeasureAlignedPhrases(improvedPhrases, grid);
+    
     console.log('Phrase improvement:', {
       beforeMerging: rawPhrases.length,
-      afterMerging: improvedPhrases.length,
-      improvement: Math.round((rawPhrases.length - improvedPhrases.length) / rawPhrases.length * 100) + '%'
+      afterFirstMerge: improvedPhrases.length,
+      afterMeasureAlignment: measureBasedPhrases.length,
+      totalImprovement: Math.round((rawPhrases.length - measureBasedPhrases.length) / rawPhrases.length * 100) + '%'
     });
     
-    return improvedPhrases;
+    return measureBasedPhrases;
   }
 
   calculateBeatMeasureGrid(track, notes) {
@@ -1175,22 +1189,22 @@ class MIDIHumanizer {
       let noteChangeScore = 0;
       
       // Large time gaps suggest phrase boundaries
-      if (timeDiff > grid.ticksPerBeat) { // Changed from /4 to full beat
-        noteChangeScore += Math.min(1, timeDiff / grid.ticksPerBeat) * 0.8;
+      if (timeDiff > grid.ticksPerBeat * 1.5) { // Changed from 1 beat to 1.5 beats - more restrictive
+        noteChangeScore += Math.min(1, timeDiff / (grid.ticksPerBeat * 2)) * 0.8;
       }
       
       // Large pitch jumps suggest phrase boundaries
-      if (pitchDiff > 4) { // More than major third
+      if (pitchDiff > 7) { // Changed from 4 to 7 semitones - more restrictive
         noteChangeScore += Math.min(1, pitchDiff / 12) * 0.6;
       }
       
       // Significant velocity changes
-      if (velocityDiff > 20) {
+      if (velocityDiff > 30) { // Changed from 20 to 30 - more restrictive
         noteChangeScore += Math.min(1, velocityDiff / 64) * 0.4;
       }
       
       // Register significant changes
-      if (noteChangeScore > 0.6) { // Increased threshold from 0.3 to 0.6
+      if (noteChangeScore > 1.0) { // Increased threshold from 0.6 to 1.0 - much more restrictive
         changeScores.push({
           time: current.startTime,
           score: noteChangeScore,
@@ -1661,37 +1675,94 @@ class MIDIHumanizer {
     const duration2 = (phrase2.end - phrase2.start) / grid.ticksPerBeat;
     const gap = (phrase2.start - phrase1.end) / grid.ticksPerBeat;
     
-    // Rule 1: Merge if both phrases are very short (< 1 beat each)
-    if (duration1 < 1 && duration2 < 1) {
+    // Only merge very small fragments, let measure-based analysis handle the rest
+    
+    // Rule 1: Merge single-note phrases with very small gaps
+    if (phrase1.notes.length === 1 && phrase2.notes.length === 1 && gap < 0.5) {
       return true;
     }
     
-    // Rule 2: Merge if first phrase is very short and gap is small
-    if (duration1 < 0.5 && gap < 0.5) {
+    // Rule 2: Merge if both phrases are extremely short (< 0.5 beats each)
+    if (duration1 < 0.5 && duration2 < 0.5) {
       return true;
     }
     
-    // Rule 3: Merge if second phrase is very short and would create a better combined length
-    if (duration2 < 0.5 && (duration1 + duration2) < 4) {
+    // Rule 3: Merge if gap is tiny (notes probably belong together)
+    if (gap < 0.25) {
       return true;
     }
     
-    // Rule 4: Merge if gap is very small and combined length is reasonable
-    if (gap < 0.25 && (duration1 + duration2) < 6) {
-      return true;
-    }
-    
-    // Rule 5: Merge single-note phrases with small gaps
-    if (phrase1.notes.length === 1 && phrase2.notes.length === 1 && gap < 1) {
-      return true;
-    }
-    
-    // Rule 6: Merge if both phrases have few notes and are close
-    if (phrase1.notes.length <= 2 && phrase2.notes.length <= 2 && gap < 2) {
+    // Rule 4: Merge if first phrase is a single short note and gap is small
+    if (phrase1.notes.length === 1 && duration1 < 1 && gap < 1) {
       return true;
     }
     
     return false;
+  }
+
+  createMeasureAlignedPhrases(phrases, grid) {
+    // Create phrases based on measure boundaries (1, 2, 4, 8 measures) as suggested by Kanade-dev
+    const measureLength = grid.ticksPerMeasure;
+    const totalTicks = grid.totalTicks;
+    const newPhrases = [];
+    
+    // Calculate optimal phrase lengths for this piece
+    const preferredMeasureCounts = [2, 4, 8, 1]; // Priority order: 2, 4, 8, then 1 measure phrases
+    
+    let currentTick = 0;
+    
+    while (currentTick < totalTicks) {
+      let bestPhraseLength = measureLength; // Default to 1 measure
+      
+      // Try different measure counts to find the best fit
+      for (const measureCount of preferredMeasureCounts) {
+        const candidateLength = measureCount * measureLength;
+        const remainingTicks = totalTicks - currentTick;
+        
+        // If this phrase length fits well and aligns with musical structure
+        if (candidateLength <= remainingTicks && 
+            (candidateLength <= remainingTicks * 0.8 || candidateLength === remainingTicks)) {
+          
+          // Check if there are notes in this range
+          const notesInRange = this.getNotesInRange(phrases, currentTick, currentTick + candidateLength);
+          
+          if (notesInRange.length > 0) {
+            bestPhraseLength = candidateLength;
+            break;
+          }
+        }
+      }
+      
+      // Create phrase for this measure-based segment
+      const phraseEnd = Math.min(currentTick + bestPhraseLength, totalTicks);
+      const notesInPhrase = this.getNotesInRange(phrases, currentTick, phraseEnd);
+      
+      if (notesInPhrase.length > 0) {
+        newPhrases.push({
+          start: currentTick,
+          end: phraseEnd,
+          notes: notesInPhrase
+        });
+      }
+      
+      currentTick = phraseEnd;
+    }
+    
+    return newPhrases;
+  }
+
+  getNotesInRange(phrases, startTick, endTick) {
+    const notesInRange = [];
+    
+    phrases.forEach(phrase => {
+      phrase.notes.forEach(note => {
+        if (note.time >= startTick && note.time < endTick) {
+          notesInRange.push(note);
+        }
+      });
+    });
+    
+    return notesInRange.sort((a, b) => a.time - b.time);
   }
 
   // New phrase detection methods based on musical patterns
