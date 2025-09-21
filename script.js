@@ -1091,7 +1091,18 @@ class MIDIHumanizer {
       lastNote: notes[notes.length - 1]?.endTime
     });
     
-    return this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
+    const rawPhrases = this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
+    
+    // Apply intelligent post-processing to merge fragmented phrases
+    const improvedPhrases = this.mergeFragmentedPhrases(rawPhrases, grid);
+    
+    console.log('Phrase improvement:', {
+      beforeMerging: rawPhrases.length,
+      afterMerging: improvedPhrases.length,
+      improvement: Math.round((rawPhrases.length - improvedPhrases.length) / rawPhrases.length * 100) + '%'
+    });
+    
+    return improvedPhrases;
   }
 
   calculateBeatMeasureGrid(track, notes) {
@@ -1609,6 +1620,78 @@ class MIDIHumanizer {
     }
     
     return phrases.filter(phrase => phrase.notes.length > 0);
+  }
+
+  // Intelligent phrase merging for better musical coherence
+  mergeFragmentedPhrases(phrases, grid) {
+    if (phrases.length <= 1) return phrases;
+    
+    const mergedPhrases = [];
+    let currentPhrase = phrases[0];
+    
+    for (let i = 1; i < phrases.length; i++) {
+      const nextPhrase = phrases[i];
+      
+      // Calculate characteristics for merge decision
+      const shouldMerge = this.shouldMergePhrases(currentPhrase, nextPhrase, grid);
+      
+      if (shouldMerge) {
+        // Merge the phrases
+        currentPhrase = {
+          start: currentPhrase.start,
+          end: nextPhrase.end,
+          notes: [...currentPhrase.notes, ...nextPhrase.notes]
+        };
+      } else {
+        // Keep current phrase and move to next
+        mergedPhrases.push(currentPhrase);
+        currentPhrase = nextPhrase;
+      }
+    }
+    
+    // Add the final phrase
+    mergedPhrases.push(currentPhrase);
+    
+    return mergedPhrases;
+  }
+  
+  shouldMergePhrases(phrase1, phrase2, grid) {
+    // Calculate phrase durations in beats
+    const duration1 = (phrase1.end - phrase1.start) / grid.ticksPerBeat;
+    const duration2 = (phrase2.end - phrase2.start) / grid.ticksPerBeat;
+    const gap = (phrase2.start - phrase1.end) / grid.ticksPerBeat;
+    
+    // Rule 1: Merge if both phrases are very short (< 1 beat each)
+    if (duration1 < 1 && duration2 < 1) {
+      return true;
+    }
+    
+    // Rule 2: Merge if first phrase is very short and gap is small
+    if (duration1 < 0.5 && gap < 0.5) {
+      return true;
+    }
+    
+    // Rule 3: Merge if second phrase is very short and would create a better combined length
+    if (duration2 < 0.5 && (duration1 + duration2) < 4) {
+      return true;
+    }
+    
+    // Rule 4: Merge if gap is very small and combined length is reasonable
+    if (gap < 0.25 && (duration1 + duration2) < 6) {
+      return true;
+    }
+    
+    // Rule 5: Merge single-note phrases with small gaps
+    if (phrase1.notes.length === 1 && phrase2.notes.length === 1 && gap < 1) {
+      return true;
+    }
+    
+    // Rule 6: Merge if both phrases have few notes and are close
+    if (phrase1.notes.length <= 2 && phrase2.notes.length <= 2 && gap < 2) {
+      return true;
+    }
+    
+    return false;
   }
 
   // New phrase detection methods based on musical patterns
