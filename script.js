@@ -1030,7 +1030,10 @@ class MIDIHumanizer {
       tempo: grid.tempo,
       rawBoundaries: changeScores.length,
       weightedBoundaries: boundaries.length,
-      finalPhrases: boundaries.length + 1
+      finalPhrases: boundaries.length + 1,
+      totalTicks: grid.totalTicks,
+      firstNote: notes[0]?.time,
+      lastNote: notes[notes.length - 1]?.endTime
     });
     
     return this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
@@ -1074,8 +1077,20 @@ class MIDIHumanizer {
   }
 
   calculateMusicFeatureChanges(notes, grid) {
-    const windowSize = grid.ticksPerBeat; // Analyze in beat-sized windows
+    if (notes.length < 2) {
+      console.log('Not enough notes for change detection');
+      return [];
+    }
+    
+    const windowSize = Math.max(grid.ticksPerBeat / 4, 12); // Very small windows for maximum sensitivity
     const changeScores = [];
+    
+    console.log('Window analysis:', {
+      windowSize,
+      totalTicks: grid.totalTicks,
+      ticksPerBeat: grid.ticksPerBeat,
+      noteSpan: `${notes[0]?.time} to ${notes[notes.length - 1]?.endTime}`
+    });
     
     for (let time = 0; time < grid.totalTicks; time += windowSize) {
       const windowNotes = notes.filter(n => n.time >= time && n.time < time + windowSize);
@@ -1090,14 +1105,44 @@ class MIDIHumanizer {
       // Calculate change magnitude
       const changeScore = this.calculateFeatureChangeMagnitude(currentFeatures, nextFeatures);
       
-      changeScores.push({
-        time: time + windowSize, // Boundary is at end of current window
-        score: changeScore,
-        features: { current: currentFeatures, next: nextFeatures }
-      });
+      // Add artificial change score for rhythmic patterns
+      const rhythmScore = this.calculateRhythmicChange(windowNotes, nextWindowNotes);
+      const combinedScore = Math.max(changeScore, rhythmScore * 0.5);
+      
+      if (combinedScore > 0) {
+        changeScores.push({
+          time: time + windowSize, // Boundary is at end of current window
+          score: combinedScore,
+          features: { current: currentFeatures, next: nextFeatures }
+        });
+      }
     }
     
+    console.log('Change scores generated:', changeScores.length, changeScores);
     return changeScores;
+  }
+
+  calculateRhythmicChange(currentNotes, nextNotes) {
+    if (currentNotes.length === 0 && nextNotes.length === 0) return 0;
+    if (currentNotes.length === 0 || nextNotes.length === 0) return 0.3; // Silence change
+    
+    // Simple rhythmic density change detection
+    const currentDensity = currentNotes.length;
+    const nextDensity = nextNotes.length;
+    const densityChange = Math.abs(currentDensity - nextDensity) / Math.max(currentDensity, nextDensity, 1);
+    
+    // Pitch movement patterns
+    const currentRange = this.getPitchRange(currentNotes);
+    const nextRange = this.getPitchRange(nextNotes);
+    const rangeChange = Math.abs(currentRange - nextRange) / Math.max(currentRange, nextRange, 12);
+    
+    return Math.min(1, densityChange + rangeChange * 0.5);
+  }
+
+  getPitchRange(notes) {
+    if (notes.length === 0) return 0;
+    const pitches = notes.map(n => n.pitch);
+    return Math.max(...pitches) - Math.min(...pitches);
   }
 
   extractMusicFeatures(notes) {
@@ -1167,10 +1212,22 @@ class MIDIHumanizer {
   }
 
   detectPhraseBoundaryPeaks(weightedScores, grid) {
-    if (weightedScores.length < 3) return [];
+    if (weightedScores.length < 2) {
+      console.log('Too few weighted scores, using fallback strategy');
+      return this.createFallbackBoundaries(grid);
+    }
     
     const peaks = [];
-    const minPhraseLength = grid.ticksPerMeasure * 0.5; // Minimum 0.5 measure between phrases for more sensitivity
+    const minPhraseLength = Math.min(grid.ticksPerMeasure * 0.25, grid.ticksPerBeat); // More sensitive minimum distance
+    
+    // For very short pieces, use a simpler approach based on time intervals
+    if (weightedScores.length < 5) {
+      console.log('Short piece detected, using simple segmentation');
+      return this.createFallbackBoundaries(grid);
+    }
+    
+    // Lower threshold significantly for small MIDI files
+    const dynamicThreshold = Math.max(0.02, 0.08 * Math.min(1, weightedScores.length / 10));
     
     // Find local maxima in weighted scores
     for (let i = 1; i < weightedScores.length - 1; i++) {
@@ -1181,7 +1238,7 @@ class MIDIHumanizer {
       // Check if this is a local maximum with significant score
       if (current.weightedScore > prev.weightedScore && 
           current.weightedScore > next.weightedScore &&
-          current.weightedScore > 0.08) { // Lowered threshold for more sensitive phrase detection
+          current.weightedScore > dynamicThreshold) {
         
         // Ensure minimum distance from previous peak
         if (peaks.length === 0 || current.time - peaks[peaks.length - 1] >= minPhraseLength) {
@@ -1190,8 +1247,40 @@ class MIDIHumanizer {
       }
     }
     
-    // Limit to maximum 8 boundaries (9 phrases) for more detailed phrase detection
+    // If no peaks found, create artificial boundaries for reasonable phrase division
+    if (peaks.length === 0) {
+      console.log('No peaks found, using fallback boundaries');
+      return this.createFallbackBoundaries(grid);
+    }
+    
+    // Limit to maximum 8 boundaries (9 phrases)
     return peaks.slice(0, 8);
+  }
+
+  createFallbackBoundaries(grid) {
+    const totalTicks = grid.totalTicks;
+    const peaks = [];
+    
+    // For very short pieces (less than 2 measures), create 2-3 phrases
+    if (totalTicks < grid.ticksPerMeasure * 2) {
+      const numPhrases = Math.max(2, Math.min(3, Math.ceil(totalTicks / (grid.ticksPerBeat * 2))));
+      const segmentLength = totalTicks / numPhrases;
+      
+      for (let i = 1; i < numPhrases; i++) {
+        peaks.push(i * segmentLength);
+      }
+    } else {
+      // For longer pieces, use measure-based segmentation
+      const numPhrases = Math.min(4, Math.max(2, Math.ceil(totalTicks / grid.ticksPerMeasure)));
+      const segmentLength = totalTicks / numPhrases;
+      
+      for (let i = 1; i < numPhrases; i++) {
+        peaks.push(i * segmentLength);
+      }
+    }
+    
+    console.log('Created fallback boundaries:', peaks);
+    return peaks;
   }
   
   extractNotesFromTrack(track) {
