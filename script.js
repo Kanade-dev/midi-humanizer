@@ -1181,7 +1181,7 @@ class MIDIHumanizer {
       // Register significant changes
       if (noteChangeScore > 0.3) {
         changeScores.push({
-          time: current.time,
+          time: current.startTime,
           score: noteChangeScore,
           features: { 
             type: 'note-level',
@@ -1195,8 +1195,8 @@ class MIDIHumanizer {
     
     // Also do windowed analysis for broader patterns
     for (let time = windowSize; time < grid.totalTicks - windowSize; time += windowSize / 2) {
-      const windowNotes = notes.filter(n => n.time >= time - windowSize/2 && n.time < time + windowSize/2);
-      const nextWindowNotes = notes.filter(n => n.time >= time + windowSize/2 && n.time < time + windowSize * 1.5);
+      const windowNotes = notes.filter(n => n.startTime >= time - windowSize/2 && n.startTime < time + windowSize/2);
+      const nextWindowNotes = notes.filter(n => n.startTime >= time + windowSize/2 && n.startTime < time + windowSize * 1.5);
       
       if (windowNotes.length === 0 && nextWindowNotes.length === 0) continue;
       
