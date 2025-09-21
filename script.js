@@ -385,7 +385,11 @@ class MIDIHumanizer {
       
       if (this.isNoteOn(event)) {
         // Apply intelligent timing humanization based on musical context
+        const originalTime = event.time;
         event.time = this.humanizeTimingIntelligent(event.time, event.data1, style, intensity, trackAnalysis, i);
+        
+        // Check for timing conflicts with previous events and resolve
+        event.time = this.resolveTimingConflicts(event, humanizedEvents, originalTime);
         
         // Apply intelligent velocity humanization based on musical phrasing
         event.data2 = this.humanizeVelocityIntelligent(event.data2, event.data1, style, intensity, trackAnalysis, i);
@@ -405,6 +409,9 @@ class MIDIHumanizer {
           const humanizedDuration = this.humanizeDurationIntelligent(duration, event.data1, style, intensity, trackAnalysis, i);
           event.time = noteOn.time + humanizedDuration;
           
+          // Ensure note off doesn't conflict with subsequent note ons
+          event.time = this.resolveNoteOffConflicts(event, humanizedEvents, noteOn);
+          
           noteOnEvents.splice(noteOnIndex, 1);
         }
       }
@@ -412,10 +419,81 @@ class MIDIHumanizer {
       humanizedEvents.push(event);
     }
     
-    // Sort events by time
+    // Sort events by time and perform final conflict resolution
     humanizedEvents.sort((a, b) => a.time - b.time);
     
+    // Final pass: ensure minimum spacing between all events
+    this.enforceMinimumSpacing(humanizedEvents);
+    
     return humanizedEvents;
+  }
+
+  // Timing conflict resolution methods
+  resolveTimingConflicts(currentEvent, previousEvents, originalTime) {
+    const minSpacing = 5; // Minimum ticks between events
+    let adjustedTime = currentEvent.time;
+    
+    // Find the latest event that could conflict
+    for (let i = previousEvents.length - 1; i >= 0; i--) {
+      const prevEvent = previousEvents[i];
+      
+      // Only check recent events within a reasonable window
+      if (originalTime - prevEvent.time > 480) break; // Within 1 beat (480 ticks)
+      
+      if (Math.abs(adjustedTime - prevEvent.time) < minSpacing) {
+        // Conflict detected, adjust timing
+        if (adjustedTime >= prevEvent.time) {
+          adjustedTime = prevEvent.time + minSpacing;
+        } else {
+          // If adjustment would push us forward too much, limit the humanization
+          const maxForwardAdjustment = originalTime * 0.02; // Max 2% forward adjustment
+          adjustedTime = Math.min(adjustedTime, originalTime + maxForwardAdjustment);
+          
+          if (adjustedTime - prevEvent.time < minSpacing) {
+            adjustedTime = prevEvent.time + minSpacing;
+          }
+        }
+      }
+    }
+    
+    return adjustedTime;
+  }
+
+  resolveNoteOffConflicts(noteOffEvent, allEvents, correspondingNoteOn) {
+    const minDuration = 10; // Minimum note duration in ticks
+    let adjustedTime = noteOffEvent.time;
+    
+    // Ensure minimum note duration
+    const minOffTime = correspondingNoteOn.time + minDuration;
+    if (adjustedTime < minOffTime) {
+      adjustedTime = minOffTime;
+    }
+    
+    // Check conflicts with subsequent events
+    const futureEvents = allEvents.filter(e => e.time > correspondingNoteOn.time);
+    for (const futureEvent of futureEvents) {
+      if (this.isNoteOn(futureEvent) && 
+          Math.abs(adjustedTime - futureEvent.time) < 5) {
+        // Adjust to avoid conflict
+        adjustedTime = Math.min(adjustedTime, futureEvent.time - 5);
+        break;
+      }
+    }
+    
+    return Math.max(adjustedTime, minOffTime);
+  }
+
+  enforceMinimumSpacing(events) {
+    const minSpacing = 3; // Minimum spacing between any events
+    
+    for (let i = 1; i < events.length; i++) {
+      const prevEvent = events[i - 1];
+      const currentEvent = events[i];
+      
+      if (currentEvent.time - prevEvent.time < minSpacing) {
+        currentEvent.time = prevEvent.time + minSpacing;
+      }
+    }
   }
 
   humanizeTiming(time, style, intensity) {
@@ -1087,130 +1165,214 @@ class MIDIHumanizer {
   createAnalysisSummary(analysis, style) {
     let html = '';
     
-    // Process each track's analysis
+    // Create a more user-friendly summary first
+    html += `<div class="analysis-section summary-section">`;
+    html += `<h4>🎵 楽曲の特徴とヒューマナイズ効果</h4>`;
+    html += this.createUserFriendlySummary(analysis, style);
+    html += `</div>`;
+    
+    // Add a toggle for detailed technical analysis
+    html += `<div class="analysis-section">`;
+    html += `<h4>📊 詳細分析データ <button class="toggle-btn" onclick="this.nextElementSibling.classList.toggle('hidden')">表示/非表示</button></h4>`;
+    html += `<div class="detailed-analysis hidden">`;
+    
+    // Process each track's analysis with better explanations
     analysis.tracks.forEach((trackAnalysis, trackIndex) => {
       if (trackAnalysis.chords.length === 0 && trackAnalysis.melody.notes.length === 0) return;
       
       html += `<div class="track-analysis">`;
-      html += `<h4>🎵 Track ${trackIndex + 1} Analysis</h4>`;
+      html += `<h5>🎼 Track ${trackIndex + 1} の詳細</h5>`;
       
-      // Chord Progression Analysis
+      // Chord Analysis with better explanations
       if (trackAnalysis.chords.length > 0) {
-        html += `<div class="analysis-section chord-progression">`;
-        html += `<h4>🎼 コード進行 (Chord Progression)</h4>`;
-        html += `<div class="chord-list">`;
-        
-        trackAnalysis.chords.forEach(chord => {
-          const tensionClass = chord.tension > 0.6 ? 'tension-high' : 
-                              chord.tension > 0.3 ? 'tension-medium' : '';
-          html += `<span class="chord-item ${tensionClass}" title="Tension: ${chord.tension.toFixed(2)}">${chord.quality}</span>`;
-        });
-        
-        html += `</div>`;
-        html += `<p><small>緊張度: 🔴高 🟡中 🔵低 | 検出コード数: ${trackAnalysis.chords.length}</small></p>`;
+        html += `<div class="analysis-subsection chord-progression">`;
+        html += `<strong>🎹 和音の流れ:</strong> `;
+        html += this.interpretChordProgression(trackAnalysis.chords);
         html += `</div>`;
       }
       
-      // Melody Analysis
+      // Melody Analysis with interpretation
       if (trackAnalysis.melody.notes.length > 0) {
-        html += `<div class="analysis-section melody-analysis">`;
-        html += `<h4>🎵 メロディー分析 (Melodic Analysis)</h4>`;
-        
-        // Melody peaks
-        if (trackAnalysis.melody.peaks.length > 0) {
-          html += `<p><strong>フレーズ頂点:</strong> `;
-          trackAnalysis.melody.peaks.forEach(peak => {
-            html += `<span class="melody-peak">Peak ${peak.intensity}</span>`;
-          });
-          html += `</p>`;
-        }
-        
-        // Stats
-        html += `<div class="stats-grid">`;
-        html += `<div class="stat-item">`;
-        html += `<div class="stat-value">${trackAnalysis.melody.range}</div>`;
-        html += `<div class="stat-label">音域 (semitones)</div>`;
-        html += `</div>`;
-        html += `<div class="stat-item">`;
-        html += `<div class="stat-value">${trackAnalysis.melody.notes.length}</div>`;
-        html += `<div class="stat-label">メロディー音符数</div>`;
-        html += `</div>`;
-        html += `<div class="stat-item">`;
-        html += `<div class="stat-value">${trackAnalysis.melody.peaks.length}</div>`;
-        html += `<div class="stat-label">頂点数</div>`;
-        html += `</div>`;
-        html += `</div>`;
+        html += `<div class="analysis-subsection melody-analysis">`;
+        html += `<strong>🎵 メロディーライン:</strong> `;
+        html += this.interpretMelody(trackAnalysis.melody);
         html += `</div>`;
       }
       
-      // Phrase Structure Analysis
+      // Phrase Analysis with timing info
       if (trackAnalysis.phrasing.length > 0) {
-        html += `<div class="analysis-section phrase-structure">`;
-        html += `<h4>🎭 フレーズ構造 (Phrase Structure)</h4>`;
-        html += `<p>`;
-        trackAnalysis.phrasing.forEach((phrase, index) => {
-          const duration = ((phrase.end - phrase.start) / 96).toFixed(1);
-          html += `<span class="phrase-item">Phrase ${index + 1} (${duration}beats, ${phrase.notes.length}notes)</span>`;
-        });
-        html += `</p>`;
-        html += `<p><small>検出フレーズ数: ${trackAnalysis.phrasing.length}</small></p>`;
+        html += `<div class="analysis-subsection phrase-structure">`;
+        html += `<strong>🎭 フレーズ構造:</strong> `;
+        html += this.interpretPhrasing(trackAnalysis.phrasing);
         html += `</div>`;
       }
       
-      // Rhythm Analysis
+      // Rhythm Analysis with groove explanation
       if (trackAnalysis.rhythm) {
-        html += `<div class="analysis-section rhythm-analysis">`;
-        html += `<h4>🥁 リズム分析 (Rhythmic Analysis)</h4>`;
-        html += `<div class="stats-grid">`;
-        html += `<div class="stat-item">`;
-        html += `<div class="stat-value">${(trackAnalysis.rhythm.syncopation * 100).toFixed(1)}%</div>`;
-        html += `<div class="stat-label">シンコペーション度</div>`;
-        html += `</div>`;
-        html += `<div class="stat-item">`;
-        html += `<div class="stat-value">${style}</div>`;
-        html += `<div class="stat-label">適用スタイル</div>`;
-        html += `</div>`;
-        if (trackAnalysis.rhythm.groove) {
-          html += `<div class="stat-item">`;
-          html += `<div class="stat-value">${trackAnalysis.rhythm.groove.swing ? 'スウィング' : 'ストレート'}</div>`;
-          html += `<div class="stat-label">グルーヴタイプ</div>`;
-          html += `</div>`;
-        }
-        html += `</div>`;
+        html += `<div class="analysis-subsection rhythm-analysis">`;
+        html += `<strong>🥁 リズム感:</strong> `;
+        html += this.interpretRhythm(trackAnalysis.rhythm, style);
         html += `</div>`;
       }
       
       html += `</div>`; // Close track-analysis
     });
     
-    // Overall analysis summary
-    html += `<div class="analysis-section">`;
-    html += `<h4>📊 総合分析結果 (Overall Analysis)</h4>`;
-    html += `<p>この楽曲は<strong>${style}</strong>スタイルとして分析され、以下の特徴に基づいてヒューマナイズされました：</p>`;
-    html += `<ul>`;
+    html += `</div>`; // Close detailed-analysis
+    html += `</div>`; // Close analysis-section
+    
+    return html;
+  }
+
+  createUserFriendlySummary(analysis, style) {
+    let html = `<div class="friendly-summary">`;
+    
+    // Calculate overall characteristics
+    const totalTracks = analysis.tracks.filter(t => t.chords.length > 0 || t.melody.notes.length > 0).length;
+    const hasChords = analysis.tracks.some(t => t.chords.length > 0);
+    const hasMelody = analysis.tracks.some(t => t.melody.notes.length > 0);
+    
+    // Music type detection
+    let musicType = '';
+    if (hasChords && hasMelody) {
+      musicType = 'メロディーと伴奏を含む楽曲';
+    } else if (hasChords) {
+      musicType = '主に和音中心の楽曲';
+    } else if (hasMelody) {
+      musicType = '主にメロディー中心の楽曲';
+    }
+    
+    html += `<div class="music-interpretation">`;
+    html += `<h5>🎼 この楽曲について</h5>`;
+    html += `<p><strong>${musicType}</strong>として認識されました。`;
+    html += `${totalTracks}つの音源パートを検出し、<strong>${style}スタイル</strong>でヒューマナイズを適用しました。</p>`;
+    html += `</div>`;
+    
+    // What humanization did
+    html += `<div class="humanization-effects">`;
+    html += `<h5>🎨 適用された効果</h5>`;
+    html += `<div class="effect-grid">`;
     
     switch(style) {
       case 'classical':
-        html += `<li>✨ クラシカルな演奏表現：フレーズ構造に基づく自然なルバート</li>`;
-        html += `<li>🎼 和声進行の緊張感に応じた表現力調整</li>`;
-        html += `<li>🎵 対位法的声部における独立性重視</li>`;
+        html += `<div class="effect-item">🎼 <strong>表現力豊かな演奏</strong><br><small>フレーズの自然な起伏とルバート</small></div>`;
+        html += `<div class="effect-item">🎹 <strong>和声の響きを重視</strong><br><small>不協和音での微妙な間の取り方</small></div>`;
+        html += `<div class="effect-item">🎵 <strong>レガート奏法</strong><br><small>音符同士の滑らかなつながり</small></div>`;
         break;
       case 'jazz':
-        html += `<li>🎷 ジャズスタイル：スウィング感の自動適用</li>`;
-        html += `<li>🎶 シンコペーションの強調とグルーヴ感</li>`;
-        html += `<li>🎹 ブルーノートでの特別な扱い</li>`;
+        html += `<div class="effect-item">🎷 <strong>スウィング感</strong><br><small>8分音符の跳ねるようなリズム</small></div>`;
+        html += `<div class="effect-item">🎶 <strong>シンコペーション強調</strong><br><small>裏拍のアクセントと緊張感</small></div>`;
+        html += `<div class="effect-item">🎹 <strong>アーティキュレーション</strong><br><small>音符の歯切れ良い表現</small></div>`;
         break;
       case 'pop':
-        html += `<li>🎤 ポップス演奏：ビート感重視のタイミング調整</li>`;
-        html += `<li>🎸 コード進行のポップ感強化</li>`;
-        html += `<li>🎵 メロディアスなフレーズでの歌唱性重視</li>`;
+        html += `<div class="effect-item">🎤 <strong>グルーヴ感重視</strong><br><small>一定のビート感を保った演奏</small></div>`;
+        html += `<div class="effect-item">🎸 <strong>コード感の強化</strong><br><small>ポップスらしい和音の響き</small></div>`;
+        html += `<div class="effect-item">🎵 <strong>歌いやすい表現</strong><br><small>メロディーの自然な流れ</small></div>`;
         break;
     }
     
+    html += `</div></div>`;
+    
+    // Before/After comparison info
+    html += `<div class="comparison-info">`;
+    html += `<h5>🔄 変化のポイント</h5>`;
+    html += `<ul>`;
+    html += `<li><strong>タイミング:</strong> 機械的な正確さから人間らしい微妙なズレに変更</li>`;
+    html += `<li><strong>音量:</strong> 一定の強さからフレーズに応じた自然な強弱に変更</li>`;
+    html += `<li><strong>音の長さ:</strong> 楽譜通りの長さから表現に応じた自然な長さに変更</li>`;
+    html += `<li><strong>音色の変化:</strong> 演奏者の感情や技巧が反映された表現に変更</li>`;
     html += `</ul>`;
     html += `</div>`;
     
+    html += `</div>`;
     return html;
+  }
+
+  interpretChordProgression(chords) {
+    if (chords.length === 0) return '和音情報が検出されませんでした。';
+    
+    const tensionChords = chords.filter(c => c.tension > 0.5).length;
+    const majorChords = chords.filter(c => c.quality === 'major').length;
+    const minorChords = chords.filter(c => c.quality === 'minor').length;
+    
+    let interpretation = `${chords.length}個の和音を検出。`;
+    
+    if (majorChords > minorChords) {
+      interpretation += ' 明るい響きが中心の楽曲です。';
+    } else if (minorChords > majorChords) {
+      interpretation += ' 落ち着いた、または哀愁のある響きが中心の楽曲です。';
+    } else {
+      interpretation += ' 明暗のバランスが取れた楽曲です。';
+    }
+    
+    if (tensionChords > chords.length * 0.3) {
+      interpretation += ' 複雑で豊かな和声進行を持っています。';
+    } else {
+      interpretation += ' シンプルで親しみやすい和音構成です。';
+    }
+    
+    return interpretation;
+  }
+
+  interpretMelody(melody) {
+    if (melody.notes.length === 0) return 'メロディー情報が検出されませんでした。';
+    
+    const range = melody.range;
+    const peaks = melody.peaks.length;
+    
+    let interpretation = '';
+    
+    if (range > 24) {
+      interpretation += '広い音域を使った表現豊かなメロディーです。';
+    } else if (range > 12) {
+      interpretation += '程よい音域で歌いやすいメロディーです。';
+    } else {
+      interpretation += '狭い音域で親しみやすいメロディーです。';
+    }
+    
+    if (peaks > melody.notes.length * 0.1) {
+      interpretation += ' 起伏に富んだドラマチックな展開があります。';
+    } else {
+      interpretation += ' 穏やかで流れるような展開です。';
+    }
+    
+    return interpretation;
+  }
+
+  interpretPhrasing(phrasing) {
+    if (phrasing.length === 0) return 'フレーズ構造が検出されませんでした。';
+    
+    const avgLength = phrasing.reduce((sum, p) => sum + (p.end - p.start), 0) / phrasing.length / 96;
+    
+    let interpretation = `${phrasing.length}つのフレーズに分かれています。`;
+    
+    if (avgLength > 8) {
+      interpretation += ' 長めのフレーズでゆったりとした印象です。';
+    } else if (avgLength > 4) {
+      interpretation += ' 標準的な長さのフレーズで聴きやすい構成です。';
+    } else {
+      interpretation += ' 短めのフレーズでテンポ感のある構成です。';
+    }
+    
+    return interpretation;
+  }
+
+  interpretRhythm(rhythm, style) {
+    let interpretation = '';
+    
+    if (rhythm.syncopation > 0.3) {
+      interpretation += '裏拍を効かせたリズミカルな楽曲です。';
+    } else {
+      interpretation += 'ストレートで分かりやすいリズムの楽曲です。';
+    }
+    
+    if (rhythm.groove && rhythm.groove.swing) {
+      interpretation += ' スウィング感のあるグルーヴが特徴的です。';
+    } else {
+      interpretation += ' 一定のビート感を保った安定したリズムです。';
+    }
+    
+    return interpretation;
   }
 
   // Update button states during playback
