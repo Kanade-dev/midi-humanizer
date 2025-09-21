@@ -188,11 +188,24 @@ class MIDIHumanizer {
         border-radius: 2px;
       `;
       
-      // Find the appropriate container based on current mode
-      const timelineContainer = canvas.querySelector('.timeline-track, .phrase-visualization, .phrase-blocks');
-      if (timelineContainer) {
-        timelineContainer.style.position = 'relative';
-        timelineContainer.appendChild(indicator);
+      // Find the appropriate container based on what's currently playing
+      let targetTrack = null;
+      if (this.isPlayingOriginal) {
+        // Find the original track (first timeline-track)
+        targetTrack = canvas.querySelector('.timeline-track:first-of-type .timeline-bar');
+      } else if (this.isPlayingHumanized) {
+        // Find the humanized track (second timeline-track)  
+        targetTrack = canvas.querySelector('.timeline-track:last-of-type .timeline-bar');
+      }
+      
+      if (!targetTrack) {
+        // Fallback to any timeline container
+        targetTrack = canvas.querySelector('.timeline-track, .phrase-visualization, .phrase-blocks');
+      }
+      
+      if (targetTrack) {
+        targetTrack.style.position = 'relative';
+        targetTrack.appendChild(indicator);
       }
     }
   }
@@ -1253,8 +1266,8 @@ class MIDIHumanizer {
       return this.createFallbackBoundaries(grid);
     }
     
-    // Limit to maximum 8 boundaries (9 phrases)
-    return peaks.slice(0, 8);
+    // No limit on phrase boundaries
+    return peaks;
   }
 
   createFallbackBoundaries(grid) {
@@ -2523,16 +2536,6 @@ class MIDIHumanizer {
     container.innerHTML = `
       <div class="visualization-content">
         <div id="visualizationCanvas" class="visualization-canvas"></div>
-        <div class="visualization-legend">
-          <div class="legend-item">
-            <div class="legend-color original"></div>
-            <span>オリジナル</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color humanized"></div>
-            <span>ヒューマナイズ後</span>
-          </div>
-        </div>
       </div>
     `;
   }
