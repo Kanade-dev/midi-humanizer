@@ -13,6 +13,9 @@ class MIDIHumanizer {
     this.isPlaying = false;
     this.isPlayingOriginal = false;
     this.isPlayingHumanized = false;
+    this.playbackStartTime = 0;
+    this.playbackDuration = 0;
+    this.progressInterval = null;
     
     this.initializeEventListeners();
     this.setupIntensitySlider();
@@ -82,7 +85,73 @@ class MIDIHumanizer {
       this.currentPlayback = [];
     }
     this.isPlaying = false;
+    this.stopProgressTracking();
     this.updatePlaybackButtons();
+  }
+
+  startProgressTracking() {
+    this.stopProgressTracking(); // Clear any existing interval
+    this.progressInterval = setInterval(() => {
+      if (this.isPlaying && this.audioContext) {
+        const elapsed = (this.audioContext.currentTime - this.playbackStartTime) * 1000; // Convert to milliseconds
+        const progress = Math.min(elapsed / this.playbackDuration, 1);
+        this.updateProgressIndicator(progress);
+      }
+    }, 50); // Update every 50ms for smooth animation
+  }
+
+  stopProgressTracking() {
+    if (this.progressInterval) {
+      clearInterval(this.progressInterval);
+      this.progressInterval = null;
+    }
+    this.updateProgressIndicator(0); // Reset progress
+  }
+
+  updateProgressIndicator(progress) {
+    const progressBar = document.getElementById('playbackProgress');
+    if (progressBar) {
+      progressBar.style.width = `${progress * 100}%`;
+    }
+    
+    // Update progress in visualization if available
+    if (this.currentVisualizationMode) {
+      this.updateVisualizationProgress(progress);
+    }
+  }
+
+  updateVisualizationProgress(progress) {
+    // Find or create progress indicator in visualization
+    const canvas = document.getElementById('visualizationCanvas');
+    if (!canvas) return;
+    
+    const existingIndicator = canvas.querySelector('.playback-progress-indicator');
+    if (existingIndicator) {
+      existingIndicator.remove();
+    }
+    
+    if (progress > 0 && this.isPlaying) {
+      const indicator = document.createElement('div');
+      indicator.className = 'playback-progress-indicator';
+      indicator.style.cssText = `
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: #ff4444;
+        z-index: 100;
+        box-shadow: 0 0 8px rgba(255, 68, 68, 0.6);
+        left: ${progress * 100}%;
+        pointer-events: none;
+      `;
+      
+      // Find the appropriate container based on current mode
+      const timelineContainer = canvas.querySelector('.timeline-visualization, .phrase-visualization, .notes-container');
+      if (timelineContainer) {
+        timelineContainer.style.position = 'relative';
+        timelineContainer.appendChild(indicator);
+      }
+    }
   }
 
   // Play MIDI data using Web Audio API
@@ -103,6 +172,7 @@ class MIDIHumanizer {
 
     this.isPlaying = true;
     this.currentPlayback = [];
+    this.playbackStartTime = this.audioContext.currentTime;
     this.updatePlaybackButtons();
 
     console.log(`Playing ${isOriginal ? 'original' : 'humanized'} MIDI...`);
@@ -177,11 +247,15 @@ class MIDIHumanizer {
       });
 
       // Auto-stop playback after all notes
+      this.playbackDuration = maxTime;
       const stopTimeout = setTimeout(() => {
         this.stopPlayback();
       }, maxTime + 1000);
       
       this.currentPlayback.push(stopTimeout);
+      
+      // Start progress tracking
+      this.startProgressTracking();
       
     } catch (error) {
       console.error('Error during MIDI playback:', error);
@@ -920,7 +994,7 @@ class MIDIHumanizer {
     });
     
     // Set higher threshold for more cohesive phrases
-    const threshold = 0.8; // Increased from 0.3 to detect fewer, stronger boundaries
+    const threshold = 1.2; // Increased from 0.8 to detect fewer, stronger boundaries
     
     // Debug: Log scoring information for development
     if (scoredCandidates.length > 0) {
@@ -1532,7 +1606,7 @@ class MIDIHumanizer {
     const integratedSection = document.createElement('div');
     integratedSection.className = 'integrated-section';
     
-    // Add MIDI visualization section
+    // Add MIDI visualization section with integrated playback controls
     const visualizationHtml = `
       <div class="midi-visualization-subsection">
         <h3>MIDI視覚化 - フレーズ構造表示</h3>
@@ -1540,23 +1614,26 @@ class MIDIHumanizer {
           <button class="viz-button active" onclick="midiHumanizer.showVisualization('timeline', this)">タイムライン表示</button>
           <button class="viz-button" onclick="midiHumanizer.showVisualization('phrases', this)">フレーズ構造</button>
         </div>
+        <div class="integrated-playback-controls">
+          <div class="playback-controls">
+            <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
+            <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
+          </div>
+          <div class="playback-progress-container">
+            <div class="playback-progress-bar">
+              <div id="playbackProgress" class="playback-progress"></div>
+            </div>
+            <small>※ 再生機能は基本的な実装です。シークバーは現在の再生位置を表示します。</small>
+          </div>
+        </div>
         <div id="midiVisualization" class="midi-visualization-container">
           <!-- Visualization will be rendered here -->
         </div>
       </div>
     `;
     
-    // Add playback controls
-    const playbackHtml = `
-      <div class="playback-subsection">
-        <h3>再生比較</h3>
-        <div class="playback-controls">
-          <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
-          <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
-        </div>
-        <p><small>※ 再生機能は基本的な実装です。より詳細な比較には専用のMIDIプレイヤーをご使用ください。</small></p>
-      </div>
-    `;
+    // Remove separate playback section since it's now integrated
+    // const playbackHtml = ``;
     
     // Add analysis results if available
     let analysisHtml = '';
@@ -1571,7 +1648,7 @@ class MIDIHumanizer {
       `;
     }
     
-    integratedSection.innerHTML = visualizationHtml + playbackHtml + analysisHtml;
+    integratedSection.innerHTML = visualizationHtml + analysisHtml;
     container.insertBefore(integratedSection, container.firstChild);
     
     // Initialize MIDI visualization after the section is added to DOM
@@ -2205,7 +2282,7 @@ class MIDIHumanizer {
   }
 
   adjustZoom(delta) {
-    this.zoomLevel = Math.max(0.5, Math.min(5, (this.zoomLevel || 5) + delta));
+    this.zoomLevel = Math.max(0.5, Math.min(20, (this.zoomLevel || 5) + delta));
     // Re-render the current visualization mode
     if (this.currentVisualizationMode === 'phrases') {
       this.renderPhraseVisualization();
