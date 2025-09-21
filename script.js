@@ -945,79 +945,54 @@ class MIDIHumanizer {
 
   identifyPhraseBoundaries(track) {
     const noteEvents = track.filter(event => this.isNoteOn(event));
-    if (noteEvents.length < 4) return [{ start: 0, end: noteEvents[noteEvents.length - 1]?.time || 0, notes: noteEvents }];
+    if (noteEvents.length < 6) return [{ start: 0, end: noteEvents[noteEvents.length - 1]?.time || 0, notes: noteEvents }];
     
     // Extract notes with durations
     const notes = this.extractNotesFromTrack(track);
-    if (notes.length < 4) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
+    if (notes.length < 6) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
     
-    // Get chord analysis for cadence scoring
-    const chords = this.analyzeChordProgression(track);
+    // Analyze for phrase boundaries using musical criteria
+    const boundaries = [];
     
-    // Generate boundary candidates (with minimum spacing to reduce granularity)
-    const candidates = [];
-    const minPhraseLength = 480 * 0.5; // Minimum 0.5 beats between phrases (increased sensitivity)
-    let lastTime = 0;
+    // 1. Detect repetition and similar patterns
+    const repetitionBoundaries = this.findRepetitionBoundaries(notes);
+    boundaries.push(...repetitionBoundaries);
     
-    for (let i = 2; i < notes.length - 2; i++) { // Start from 2nd note, end 2 notes before end
-      const candidateTime = notes[i].endTime;
-      if (candidateTime - lastTime >= minPhraseLength) {
-        candidates.push({
-          index: i,
-          time: candidateTime,
-          nextTime: notes[i + 1].startTime
-        });
-        lastTime = candidateTime;
+    // 2. Detect chord progression changes
+    const chordChangeBoundaries = this.findChordChangeBoundaries(track, notes);
+    boundaries.push(...chordChangeBoundaries);
+    
+    // 3. Detect significant rests/gaps (traditional phrase separation)
+    const restBoundaries = this.findRestBoundaries(notes);
+    boundaries.push(...restBoundaries);
+    
+    // Remove duplicates and sort
+    const uniqueBoundaries = [...new Set(boundaries)].sort((a, b) => a - b);
+    
+    // Filter boundaries that are too close together (minimum phrase length)
+    const minPhraseLength = 480 * 1.0; // Minimum 1 beat between phrases
+    const filteredBoundaries = [];
+    let lastBoundary = 0;
+    
+    for (const boundary of uniqueBoundaries) {
+      if (boundary - lastBoundary >= minPhraseLength) {
+        filteredBoundaries.push(boundary);
+        lastBoundary = boundary;
       }
     }
     
-    // Score each candidate using multiple criteria
-    const scoredCandidates = candidates.map(candidate => {
-      const score = this.calculatePhraseBoundaryScore(candidate, notes, chords);
-      return { ...candidate, score };
+    // Limit to maximum 3 boundaries (4 phrases) for clarity
+    const finalBoundaries = filteredBoundaries.slice(0, 3);
+    
+    console.log('Phrase detection:', {
+      totalNotes: notes.length,
+      repetitionBoundaries: repetitionBoundaries.length,
+      chordChangeBoundaries: chordChangeBoundaries.length,
+      restBoundaries: restBoundaries.length,
+      finalPhrases: finalBoundaries.length + 1
     });
     
-    // Set configurable weights for more sensitive phrase detection
-    const weights = {
-      gap: 2.0,        // w1: ギャップ・スコア (moderate importance)
-      duration: 2.0,   // w2: 先行音符の長さスコア (increased importance)
-      contour: 1.5,    // w3: メロディ輪郭スコア (increased importance)
-      cadence: 2.5     // w4: カデンツ・スコア (reduced dominance)
-    };
-    
-    // Calculate weighted total scores
-    scoredCandidates.forEach(candidate => {
-      candidate.totalScore = 
-        (weights.gap * candidate.score.gap) +
-        (weights.duration * candidate.score.duration) +
-        (weights.contour * candidate.score.contour) +
-        (weights.cadence * candidate.score.cadence);
-    });
-    
-    // Set lower threshold for more sensitive phrase detection
-    const threshold = 0.3; // Further decreased to detect more phrase boundaries
-    
-    // Debug: Log scoring information for development
-    if (scoredCandidates.length > 0) {
-      console.log('Phrase boundary analysis:', {
-        candidates: scoredCandidates.length,
-        maxScore: Math.max(...scoredCandidates.map(c => c.totalScore)),
-        avgScore: scoredCandidates.reduce((sum, c) => sum + c.totalScore, 0) / scoredCandidates.length,
-        threshold,
-        detectedBoundaries: scoredCandidates.filter(c => c.totalScore > threshold).length
-      });
-    }
-    
-    // Select boundaries above threshold, allow more phrases for better granularity
-    const boundaries = scoredCandidates
-      .filter(candidate => candidate.totalScore > threshold)
-      .sort((a, b) => b.totalScore - a.totalScore) // Sort by score (highest first)
-      .slice(0, 4) // Maximum 4 boundaries = 5 phrases (increased from 2)
-      .map(candidate => candidate.time)
-      .sort((a, b) => a - b); // Sort by time
-    
-    // Create phrases from boundaries
-    return this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
+    return this.createPhrasesFromBoundaries(finalBoundaries, notes, noteEvents);
   }
   
   extractNotesFromTrack(track) {
@@ -1192,6 +1167,121 @@ class MIDIHumanizer {
     }
     
     return phrases.filter(phrase => phrase.notes.length > 0);
+  }
+
+  // New phrase detection methods based on musical patterns
+  
+  findRepetitionBoundaries(notes) {
+    const boundaries = [];
+    const windowSize = 4; // Look for patterns of 4 notes
+    
+    for (let i = 0; i < notes.length - windowSize * 2; i++) {
+      const pattern1 = notes.slice(i, i + windowSize);
+      
+      // Look for similar patterns later in the piece
+      for (let j = i + windowSize; j < notes.length - windowSize; j++) {
+        const pattern2 = notes.slice(j, j + windowSize);
+        
+        if (this.patternsAreSimilar(pattern1, pattern2)) {
+          // Found repetition - add boundary at start of second pattern
+          boundaries.push(pattern2[0].startTime);
+          break; // Only find first repetition for each pattern
+        }
+      }
+    }
+    
+    return boundaries;
+  }
+  
+  patternsAreSimilar(pattern1, pattern2, tolerance = 2) {
+    if (pattern1.length !== pattern2.length) return false;
+    
+    // Compare pitch intervals and rhythm patterns
+    let similarityScore = 0;
+    const maxScore = pattern1.length * 2; // Pitch + rhythm similarity
+    
+    for (let i = 0; i < pattern1.length; i++) {
+      // Pitch similarity (allow for transposition)
+      const pitch1 = pattern1[i].note;
+      const pitch2 = pattern2[i].note;
+      if (Math.abs(pitch1 - pitch2) <= tolerance) {
+        similarityScore++;
+      }
+      
+      // Rhythm similarity
+      const duration1 = pattern1[i].duration;
+      const duration2 = pattern2[i].duration;
+      if (Math.abs(duration1 - duration2) <= duration1 * 0.3) { // 30% tolerance
+        similarityScore++;
+      }
+    }
+    
+    return similarityScore >= maxScore * 0.6; // 60% similarity threshold
+  }
+  
+  findChordChangeBoundaries(track, notes) {
+    const boundaries = [];
+    const chords = this.analyzeChordProgression(track);
+    
+    if (chords.length <= 1) return boundaries;
+    
+    // Find significant chord changes
+    for (let i = 1; i < chords.length; i++) {
+      const prevChord = chords[i - 1];
+      const currentChord = chords[i];
+      
+      // Detect functional chord changes (not just different voicings)
+      if (this.isSignificantChordChange(prevChord, currentChord)) {
+        // Find the closest note boundary to this chord change
+        const chordTime = currentChord.time;
+        const closestNote = notes.find(note => note.startTime >= chordTime);
+        if (closestNote) {
+          boundaries.push(closestNote.startTime);
+        }
+      }
+    }
+    
+    return boundaries;
+  }
+  
+  isSignificantChordChange(chord1, chord2) {
+    if (!chord1.root || !chord2.root) return false;
+    
+    // Different root note
+    if (chord1.root !== chord2.root) return true;
+    
+    // Major/minor quality change
+    if (chord1.quality !== chord2.quality) return true;
+    
+    // Function change (tonic to dominant, etc.)
+    const functionalDistance = Math.abs(
+      this.getChordFunction(chord1.root) - this.getChordFunction(chord2.root)
+    );
+    return functionalDistance >= 3; // Fifth relationship or more
+  }
+  
+  getChordFunction(root) {
+    // Circle of fifths position (0 = C, 1 = G, 2 = D, etc.)
+    const circleOfFifths = ['C', 'G', 'D', 'A', 'E', 'B', 'F#', 'C#', 'F', 'Bb', 'Eb', 'Ab'];
+    return circleOfFifths.indexOf(root) || 0;
+  }
+  
+  findRestBoundaries(notes) {
+    const boundaries = [];
+    const significantRestDuration = 480; // Half beat or more
+    
+    for (let i = 0; i < notes.length - 1; i++) {
+      const currentNote = notes[i];
+      const nextNote = notes[i + 1];
+      
+      const restDuration = nextNote.startTime - currentNote.endTime;
+      
+      if (restDuration >= significantRestDuration) {
+        boundaries.push(nextNote.startTime);
+      }
+    }
+    
+    return boundaries;
   }
 
   analyzeDynamicStructure(track) {
@@ -1580,83 +1670,138 @@ class MIDIHumanizer {
 
   showResults() {
     const resultDiv = document.getElementById('result');
-    const downloadLink = document.getElementById('download');
+    
+    // Add integrated playback and analysis section first
+    this.addIntegratedSection(resultDiv);
     
     // Generate humanized MIDI file
     const humanizedBuffer = this.generateMIDIFile(this.humanizedMidiData);
     const blob = new Blob([humanizedBuffer], { type: 'audio/midi' });
     const url = URL.createObjectURL(blob);
     
-    downloadLink.href = url;
-    downloadLink.download = 'humanized.mid';
-    
-    // Add integrated playback and analysis section
-    this.addIntegratedSection(resultDiv);
+    // Set download link (now that the integrated section has been added)
+    const downloadLink = document.getElementById('download');
+    if (downloadLink) {
+      downloadLink.href = url;
+      downloadLink.download = 'humanized.mid';
+    }
     
     resultDiv.classList.remove('hidden');
   }
 
   addIntegratedSection(container) {
-    // Remove existing playback section
-    const existingSection = container.querySelector('.playback-section');
+    // Remove existing sections
+    const existingSection = container.querySelector('.integrated-section');
     if (existingSection) {
       existingSection.remove();
     }
     
-    // Create integrated section with both playback and analysis
+    // Create simplified integrated section
     const integratedSection = document.createElement('div');
     integratedSection.className = 'integrated-section';
     
-    // Add MIDI visualization section with integrated playback controls
-    const visualizationHtml = `
-      <div class="midi-visualization-subsection">
-        <h3>MIDI視覚化 - フレーズ構造表示</h3>
-        <div class="visualization-controls">
-          <button class="viz-button active" onclick="midiHumanizer.showVisualization('timeline', this)">タイムライン表示</button>
-          <button class="viz-button" onclick="midiHumanizer.showVisualization('phrases', this)">フレーズ構造</button>
+    // Simplified interface with essential features only
+    const simplifiedHtml = `
+      <div class="results-summary">
+        <h3>ヒューマナイズ完了</h3>
+        <p>処理が完了しました。以下で結果をプレビューしてダウンロードできます。</p>
+      </div>
+      
+      <div class="playback-section">
+        <h4>再生とプレビュー</h4>
+        <div class="playback-controls">
+          <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
+          <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
         </div>
-        <div class="integrated-playback-controls">
-          <div class="playback-controls">
-            <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
-            <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
+        <div class="playback-progress-container">
+          <div class="playback-progress-bar">
+            <div id="playbackProgress" class="playback-progress"></div>
           </div>
-          <div class="playback-progress-container">
-            <div class="playback-progress-bar">
-              <div id="playbackProgress" class="playback-progress"></div>
-            </div>
-            <small>※ 再生機能は基本的な実装です。シークバーは現在の再生位置を表示します。</small>
-          </div>
+          <small>※ 基本的な再生機能です</small>
         </div>
-        <div id="midiVisualization" class="midi-visualization-container">
-          <!-- Visualization will be rendered here -->
+      </div>
+      
+      <div class="phrase-analysis-section">
+        <h4>フレーズ分析結果</h4>
+        <div id="phraseAnalysisResults">
+          <!-- Phrase analysis will be inserted here -->
+        </div>
+      </div>
+      
+      <div class="download-section">
+        <a id="download" href="#" download class="download-button">ヒューマナイズされたMIDIをダウンロード</a>
+      </div>
+    `;
+    
+    integratedSection.innerHTML = simplifiedHtml;
+    container.appendChild(integratedSection);
+    
+    // Add phrase analysis results
+    this.displaySimplifiedPhraseAnalysis();
+  }
+
+  displaySimplifiedPhraseAnalysis() {
+    const container = document.getElementById('phraseAnalysisResults');
+    if (!container || !this.lastAnalysis) return;
+    
+    const firstTrack = this.lastAnalysis.tracks[0];
+    if (!firstTrack || !firstTrack.phrasing) return;
+    
+    const phrases = firstTrack.phrasing;
+    const avgLength = this.calculateAveragePhraseLength(phrases);
+    
+    let html = `
+      <div class="phrase-summary">
+        <div class="phrase-stats">
+          <span class="stat-item">検出フレーズ数: <strong>${phrases.length}</strong></span>
+          <span class="stat-item">平均フレーズ長: <strong>${avgLength.toFixed(1)}秒</strong></span>
+        </div>
+      </div>
+      
+      <div class="phrase-list">
+    `;
+    
+    phrases.forEach((phrase, index) => {
+      const duration = ((phrase.end - phrase.start) / 480).toFixed(1); // Convert to seconds
+      const noteCount = phrase.notes.length;
+      
+      html += `
+        <div class="phrase-item">
+          <span class="phrase-number">フレーズ ${index + 1}</span>
+          <span class="phrase-details">${duration}秒 (${noteCount}音)</span>
+        </div>
+      `;
+    });
+    
+    html += `</div>`;
+    
+    // Add style-specific interpretation
+    const style = this.lastStyle || 'classical';
+    const styleEffects = this.getStyleEffects(style);
+    
+    html += `
+      <div class="style-effects">
+        <h5>適用された効果 (${style}スタイル)</h5>
+        <div class="effects-list">
+          ${styleEffects.map(effect => `<span class="effect-tag">${effect}</span>`).join('')}
         </div>
       </div>
     `;
     
-    // Remove separate playback section since it's now integrated
-    // const playbackHtml = ``;
-    
-    // Add analysis results if available
-    let analysisHtml = '';
-    if (this.lastAnalysis) {
-      analysisHtml = `
-        <div class="analysis-subsection">
-          <h3>音楽分析結果 (Musical Analysis Results)</h3>
-          <div class="analysis-content">
-            ${this.createAnalysisSummary(this.lastAnalysis, this.lastStyle || 'classical')}
-          </div>
-        </div>
-      `;
+    container.innerHTML = html;
+  }
+
+  getStyleEffects(style) {
+    switch(style) {
+      case 'classical':
+        return ['表現力豊かな演奏', '和声の響きを重視', 'レガート奏法'];
+      case 'jazz':
+        return ['スウィング感', 'シンコペーション強調', 'アーティキュレーション'];
+      case 'pop':
+        return ['グルーヴ感重視', 'コード感の強化', '歌いやすい表現'];
+      default:
+        return ['自然な演奏表現'];
     }
-    
-    integratedSection.innerHTML = visualizationHtml + analysisHtml;
-    container.insertBefore(integratedSection, container.firstChild);
-    
-    // Initialize MIDI visualization after the section is added to DOM
-    setTimeout(() => {
-      this.initializeMIDIVisualization();
-      this.showVisualization('timeline');
-    }, 100);
   }
 
   displayAnalysisResults(analysis, style) {
