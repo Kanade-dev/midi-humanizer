@@ -109,12 +109,7 @@ class MIDIHumanizer {
   }
 
   updateProgressIndicator(progress) {
-    const progressBar = document.getElementById('playbackProgress');
-    if (progressBar) {
-      progressBar.style.width = `${progress * 100}%`;
-    }
-    
-    // Update progress in visualization if available
+    // Update progress in visualization instead of progress bar
     if (this.currentVisualizationMode) {
       this.updateVisualizationProgress(progress);
     }
@@ -951,48 +946,192 @@ class MIDIHumanizer {
     const notes = this.extractNotesFromTrack(track);
     if (notes.length < 6) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
     
-    // Analyze for phrase boundaries using musical criteria
-    const boundaries = [];
+    // Use enhanced grid-aware phrase detection
+    return this.detectPhrasesWithGrid(track, notes, noteEvents);
+  }
+
+  detectPhrasesWithGrid(track, notes, noteEvents) {
+    // Step 1: Establish beat and measure grid
+    const grid = this.calculateBeatMeasureGrid(track, notes);
     
-    // 1. Detect repetition and similar patterns
-    const repetitionBoundaries = this.findRepetitionBoundaries(notes);
-    boundaries.push(...repetitionBoundaries);
+    // Step 2: Calculate musical feature change scores
+    const changeScores = this.calculateMusicFeatureChanges(notes, grid);
     
-    // 2. Detect chord progression changes
-    const chordChangeBoundaries = this.findChordChangeBoundaries(track, notes);
-    boundaries.push(...chordChangeBoundaries);
+    // Step 3: Apply structural importance weighting
+    const weightedScores = this.applyStructuralWeighting(changeScores, grid);
     
-    // 3. Detect significant rests/gaps (traditional phrase separation)
-    const restBoundaries = this.findRestBoundaries(notes);
-    boundaries.push(...restBoundaries);
+    // Step 4: Detect peaks in weighted scores as phrase boundaries
+    const boundaries = this.detectPhraseBoundaryPeaks(weightedScores, grid);
     
-    // Remove duplicates and sort
-    const uniqueBoundaries = [...new Set(boundaries)].sort((a, b) => a - b);
+    console.log('Enhanced phrase detection:', {
+      totalNotes: notes.length,
+      measuresDetected: grid.totalMeasures,
+      timeSig: `${grid.timeSig.numerator}/${grid.timeSig.denominator}`,
+      tempo: grid.tempo,
+      rawBoundaries: changeScores.length,
+      weightedBoundaries: boundaries.length,
+      finalPhrases: boundaries.length + 1
+    });
     
-    // Filter boundaries that are too close together (minimum phrase length)
-    const minPhraseLength = 480 * 1.0; // Minimum 1 beat between phrases
-    const filteredBoundaries = [];
-    let lastBoundary = 0;
+    return this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
+  }
+
+  calculateBeatMeasureGrid(track, notes) {
+    // Extract tempo and time signature from MIDI track
+    let tempo = 120; // Default BPM
+    let timeSig = { numerator: 4, denominator: 4 }; // Default 4/4
+    const division = 96; // Ticks per quarter note (from header)
     
-    for (const boundary of uniqueBoundaries) {
-      if (boundary - lastBoundary >= minPhraseLength) {
-        filteredBoundaries.push(boundary);
-        lastBoundary = boundary;
+    // Look for tempo and time signature events in track
+    track.forEach(event => {
+      if (event.status === 0xFF) { // Meta event
+        if (event.data1 === 0x51) { // Set Tempo
+          // Tempo in microseconds per quarter note
+          const microsecondsPerQuarter = (event.data[0] << 16) | (event.data[1] << 8) | event.data[2];
+          tempo = Math.round(60000000 / microsecondsPerQuarter);
+        } else if (event.data1 === 0x58) { // Time Signature
+          timeSig.numerator = event.data[0];
+          timeSig.denominator = Math.pow(2, event.data[1]);
+        }
+      }
+    });
+    
+    // Calculate grid information
+    const ticksPerBeat = division;
+    const ticksPerMeasure = ticksPerBeat * timeSig.numerator;
+    const totalTicks = Math.max(...notes.map(n => n.endTime || n.time));
+    const totalMeasures = Math.ceil(totalTicks / ticksPerMeasure);
+    
+    return {
+      tempo,
+      timeSig,
+      division,
+      ticksPerBeat,
+      ticksPerMeasure,
+      totalTicks,
+      totalMeasures
+    };
+  }
+
+  calculateMusicFeatureChanges(notes, grid) {
+    const windowSize = grid.ticksPerBeat; // Analyze in beat-sized windows
+    const changeScores = [];
+    
+    for (let time = 0; time < grid.totalTicks; time += windowSize) {
+      const windowNotes = notes.filter(n => n.time >= time && n.time < time + windowSize);
+      const nextWindowNotes = notes.filter(n => n.time >= time + windowSize && n.time < time + 2 * windowSize);
+      
+      if (windowNotes.length === 0 && nextWindowNotes.length === 0) continue;
+      
+      // Calculate features for current and next windows
+      const currentFeatures = this.extractMusicFeatures(windowNotes);
+      const nextFeatures = this.extractMusicFeatures(nextWindowNotes);
+      
+      // Calculate change magnitude
+      const changeScore = this.calculateFeatureChangeMagnitude(currentFeatures, nextFeatures);
+      
+      changeScores.push({
+        time: time + windowSize, // Boundary is at end of current window
+        score: changeScore,
+        features: { current: currentFeatures, next: nextFeatures }
+      });
+    }
+    
+    return changeScores;
+  }
+
+  extractMusicFeatures(notes) {
+    if (notes.length === 0) {
+      return { density: 0, avgPitch: 60, avgVelocity: 64, pitchVariance: 0 };
+    }
+    
+    const density = notes.length;
+    const avgPitch = notes.reduce((sum, n) => sum + n.pitch, 0) / notes.length;
+    const avgVelocity = notes.reduce((sum, n) => sum + n.velocity, 0) / notes.length;
+    const pitchVariance = notes.reduce((sum, n) => sum + Math.pow(n.pitch - avgPitch, 2), 0) / notes.length;
+    
+    return { density, avgPitch, avgVelocity, pitchVariance };
+  }
+
+  calculateFeatureChangeMagnitude(current, next) {
+    // Normalize changes to 0-1 scale
+    const densityChange = Math.abs(current.density - next.density) / Math.max(current.density, next.density, 1);
+    const pitchChange = Math.abs(current.avgPitch - next.avgPitch) / 12; // Semitone normalization
+    const velocityChange = Math.abs(current.avgVelocity - next.avgVelocity) / 127;
+    const varianceChange = Math.abs(current.pitchVariance - next.pitchVariance) / Math.max(current.pitchVariance, next.pitchVariance, 1);
+    
+    // Weighted combination
+    return (densityChange * 0.3 + pitchChange * 0.3 + velocityChange * 0.2 + varianceChange * 0.2);
+  }
+
+  applyStructuralWeighting(changeScores, grid) {
+    return changeScores.map(score => {
+      const structuralWeight = this.calculateStructuralImportance(score.time, grid);
+      return {
+        ...score,
+        weightedScore: score.score * structuralWeight,
+        structuralWeight
+      };
+    });
+  }
+
+  calculateStructuralImportance(time, grid) {
+    const { ticksPerBeat, ticksPerMeasure } = grid;
+    
+    // Determine position within musical structure
+    const beatPosition = (time % ticksPerBeat) / ticksPerBeat;
+    const measurePosition = (time % ticksPerMeasure) / ticksPerMeasure;
+    const measureNumber = Math.floor(time / ticksPerMeasure);
+    
+    let weight = 0.8; // Base weight for non-structural positions
+    
+    // Check if at measure boundary
+    if (Math.abs(measurePosition) < 0.1 || Math.abs(measurePosition - 1) < 0.1) {
+      weight = 1.2; // Slightly important - measure boundary
+      
+      // Check for higher-level structural boundaries
+      if (measureNumber % 8 === 0) {
+        weight = 2.0; // Very important - 8-measure boundary
+      } else if (measureNumber % 4 === 0) {
+        weight = 1.5; // Important - 4-measure boundary
+      } else if (measureNumber % 2 === 0) {
+        weight = 1.3; // Moderately important - 2-measure boundary
+      }
+    }
+    // Check if at beat boundary (within measure)
+    else if (Math.abs(beatPosition) < 0.1 || Math.abs(beatPosition - 1) < 0.1) {
+      weight = 1.1; // Slightly important - beat boundary
+    }
+    
+    return weight;
+  }
+
+  detectPhraseBoundaryPeaks(weightedScores, grid) {
+    if (weightedScores.length < 3) return [];
+    
+    const peaks = [];
+    const minPhraseLength = grid.ticksPerMeasure * 1.0; // Minimum 1 measure between phrases
+    
+    // Find local maxima in weighted scores
+    for (let i = 1; i < weightedScores.length - 1; i++) {
+      const current = weightedScores[i];
+      const prev = weightedScores[i - 1];
+      const next = weightedScores[i + 1];
+      
+      // Check if this is a local maximum with significant score
+      if (current.weightedScore > prev.weightedScore && 
+          current.weightedScore > next.weightedScore &&
+          current.weightedScore > 0.3) { // Threshold for significance
+        
+        // Ensure minimum distance from previous peak
+        if (peaks.length === 0 || current.time - peaks[peaks.length - 1] >= minPhraseLength) {
+          peaks.push(current.time);
+        }
       }
     }
     
-    // Limit to maximum 3 boundaries (4 phrases) for clarity
-    const finalBoundaries = filteredBoundaries.slice(0, 3);
-    
-    console.log('Phrase detection:', {
-      totalNotes: notes.length,
-      repetitionBoundaries: repetitionBoundaries.length,
-      chordChangeBoundaries: chordChangeBoundaries.length,
-      restBoundaries: restBoundaries.length,
-      finalPhrases: finalBoundaries.length + 1
-    });
-    
-    return this.createPhrasesFromBoundaries(finalBoundaries, notes, noteEvents);
+    // Limit to maximum 4 boundaries (5 phrases) for clarity
+    return peaks.slice(0, 4);
   }
   
   extractNotesFromTrack(track) {
@@ -1674,6 +1813,9 @@ class MIDIHumanizer {
     // Add integrated playback and analysis section first
     this.addIntegratedSection(resultDiv);
     
+    // Initialize MIDI visualization after UI is created
+    this.initializeMIDIVisualization();
+    
     // Generate humanized MIDI file
     const humanizedBuffer = this.generateMIDIFile(this.humanizedMidiData);
     const blob = new Blob([humanizedBuffer], { type: 'audio/midi' });
@@ -1713,12 +1855,21 @@ class MIDIHumanizer {
           <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
           <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
         </div>
-        <div class="playback-progress-container">
-          <div class="playback-progress-bar">
-            <div id="playbackProgress" class="playback-progress"></div>
+        
+        <!-- Enhanced MIDI Visualizer with playback progress -->
+        <div class="midi-visualizer-container">
+          <h5>MIDIビジュアライザー</h5>
+          <div id="midiVisualization" class="midi-visualization">
+            <!-- Visualization will be populated here -->
           </div>
-          <small>※ 基本的な再生機能です</small>
+          <div class="visualization-controls">
+            <button onclick="midiHumanizer.showVisualization('timeline')" class="viz-button active">タイムライン表示</button>
+            <button onclick="midiHumanizer.showVisualization('phrases')" class="viz-button">フレーズ構造</button>
+            <button onclick="midiHumanizer.showVisualization('comparison')" class="viz-button">ビフォー・アフター比較</button>
+          </div>
         </div>
+        
+        <small>※ 基本的な再生機能です。赤い線が現在の再生位置を示します。</small>
       </div>
       
       <div class="phrase-analysis-section">
