@@ -468,3 +468,28 @@ button:active {
     grid-template-columns: 1fr;
   }
 }
+
+/* Playback Progress Indicator */
+.playback-progress-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(to bottom, #ff4444, #ff6666);
+  z-index: 1000;
+  box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
+  border-radius: 2px;
+  pointer-events: none;
+  animation: pulseProgress 1.5s ease-in-out infinite;
+}
+
+@keyframes pulseProgress {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 8px rgba(255, 68, 68, 0.6), 0 0 16px rgba(255, 68, 68, 0.3);
+  }
+}

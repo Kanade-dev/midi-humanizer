@@ -191,10 +191,9 @@ class MIDIHumanizer {
       const indicator = document.createElement('div');
       indicator.className = 'playback-progress-indicator';
       
-      // Calculate position accounting for zoom level - when zoomed in, the progress should be relative to the visible area
-      const zoomLevel = this.zoomLevel || 1;
-      // The progress bar should stay within the visible area when zoomed
-      const adjustedProgress = progress / zoomLevel;
+      // **FIXED**: Progress should be independent of zoom level - the red bar tracks absolute timeline position
+      // When zoomed in, the bar may be off-screen if the progress is beyond the visible area
+      const absoluteProgress = progress * 100; // Progress as percentage of total timeline
       
       indicator.style.cssText = `
         position: absolute;
@@ -203,25 +202,26 @@ class MIDIHumanizer {
         width: 3px;
         background: linear-gradient(to bottom, #ff4444, #ff6666);
         z-index: 1000;
-        box-shadow: 0 0 8px rgba(255, 68, 68, 0.6);
-        left: ${adjustedProgress * 100}%;
+        box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
+        left: ${absoluteProgress}%;
         pointer-events: none;
         border-radius: 2px;
+        animation: pulseProgress 1.5s ease-in-out infinite;
       `;
       
       // Find the appropriate container based on what's currently playing
       let targetTrack = null;
       if (this.isPlayingOriginal) {
         // Find the original track (first timeline-track)
-        targetTrack = canvas.querySelector('.timeline-track:first-of-type .timeline-bar');
+        targetTrack = canvas.querySelector('.timeline-track:first-of-type .timeline-bar, .timeline-track .timeline-notes');
       } else if (this.isPlayingHumanized) {
         // Find the humanized track (second timeline-track)  
-        targetTrack = canvas.querySelector('.timeline-track:last-of-type .timeline-bar');
+        targetTrack = canvas.querySelector('.timeline-track:last-of-type .timeline-bar, .timeline-track:last-of-type .timeline-notes');
       }
       
       if (!targetTrack) {
         // Fallback to any timeline container
-        targetTrack = canvas.querySelector('.timeline-track, .phrase-visualization, .phrase-blocks');
+        targetTrack = canvas.querySelector('.timeline-track, .phrase-visualization, .phrase-blocks, .timeline-content');
       }
       
       if (targetTrack) {
@@ -1049,7 +1049,13 @@ class MIDIHumanizer {
       return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
     }
     
-    // Use enhanced grid-aware phrase detection for regular files
+    // **NEW**: If we have learned patterns from previous training data, prefer using them over grid-based detection
+    if (this.learnedPatterns && this.learnedPatterns.phraseBoundaryFeatures.length > 0) {
+      console.log('Using learned patterns for phrase detection (bypassing grid-based analysis)');
+      return this.detectPhrasesUsingLearnedPatterns(track, notes, noteEvents);
+    }
+    
+    // Use enhanced grid-aware phrase detection for regular files as fallback
     return this.detectPhrasesWithGrid(track, notes, noteEvents);
   }
 
@@ -1218,6 +1224,118 @@ class MIDIHumanizer {
     });
     
     return measureBasedPhrases;
+  }
+
+  detectPhrasesUsingLearnedPatterns(track, notes, noteEvents) {
+    // Use learned patterns to detect phrases without heavy grid-based analysis
+    console.log('Applying learned patterns directly for phrase detection');
+    
+    // Still need basic grid info for timing calculations
+    const grid = this.calculateBeatMeasureGrid(track, notes);
+    
+    // Calculate basic feature changes but with reduced complexity
+    const changeScores = this.calculateMusicFeatureChanges(notes, grid);
+    
+    // Apply ONLY learned patterns without structural weighting that causes uniform lengths
+    this.enhanceScoresWithLearnedPatterns(changeScores, notes, grid);
+    this.applyComprehensiveLearnedPatterns(changeScores, notes, grid, track);
+    
+    // Use the learned patterns directly for boundary detection, skip structural weighting
+    const boundaries = this.detectLearnedPatternBoundaries(changeScores, grid);
+    
+    console.log('Learned pattern phrase detection:', {
+      totalNotes: notes.length,
+      changeScores: changeScores.length,
+      detectedBoundaries: boundaries.length,
+      finalPhrases: boundaries.length + 1,
+      learnedFeatures: this.learnedPatterns.phraseBoundaryFeatures.length
+    });
+    
+    const phrases = this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
+    
+    // Apply minimal post-processing to avoid over-regularization
+    return this.mergeOnlyVeryShortPhrases(phrases, grid);
+  }
+
+  detectLearnedPatternBoundaries(changeScores, grid) {
+    // Detection focused on learned patterns without heavy structural constraints
+    const peaks = [];
+    const minPhraseLength = Math.max(grid.ticksPerBeat, 96); // Reduced minimum phrase length
+    
+    // Sort by change score to find most significant musical changes
+    const sortedScores = [...changeScores].sort((a, b) => b.score - a.score);
+    
+    // Use adaptive threshold based on learned pattern features
+    const maxScore = sortedScores[0]?.score || 0;
+    const avgScore = changeScores.reduce((sum, s) => sum + s.score, 0) / changeScores.length;
+    
+    // More flexible threshold that allows varied phrase lengths
+    const dynamicThreshold = Math.max(0.3, Math.min(maxScore * 0.3, avgScore * 1.5));
+    
+    console.log('Learned pattern boundary detection:', {
+      totalScores: changeScores.length,
+      maxScore: maxScore.toFixed(3),
+      avgScore: avgScore.toFixed(3),
+      threshold: dynamicThreshold.toFixed(3),
+      minPhraseLength
+    });
+    
+    // Find significant changes that respect learned patterns
+    for (let i = 0; i < changeScores.length; i++) {
+      const current = changeScores[i];
+      
+      if (current.score >= dynamicThreshold) {
+        // Check if it's a local maximum or has learned pattern features
+        const isLocalMax = (i === 0 || current.score >= changeScores[i - 1].score) &&
+                          (i === changeScores.length - 1 || current.score >= changeScores[i + 1].score);
+        
+        const hasLearnedFeatures = current.features && (
+          current.features.learnedPatternBoost > 0 ||
+          current.features.strongNuanceBoost > 0 ||
+          current.features.repetitionBoost > 0
+        );
+        
+        if (isLocalMax || hasLearnedFeatures) {
+          // Check minimum distance from previous peaks
+          const validDistance = peaks.length === 0 || 
+            (current.time - peaks[peaks.length - 1]) >= minPhraseLength;
+          
+          if (validDistance) {
+            peaks.push(current.time);
+          }
+        }
+      }
+    }
+    
+    return peaks;
+  }
+
+  mergeOnlyVeryShortPhrases(phrases, grid) {
+    // Only merge phrases that are extremely short (less than half a beat)
+    const veryShortThreshold = grid.ticksPerBeat / 2;
+    const result = [];
+    
+    for (let i = 0; i < phrases.length; i++) {
+      const phrase = phrases[i];
+      const phraseDuration = phrase.end - phrase.start;
+      
+      if (phraseDuration < veryShortThreshold && result.length > 0) {
+        // Merge with previous phrase
+        const previous = result[result.length - 1];
+        previous.end = phrase.end;
+        previous.notes = previous.notes.concat(phrase.notes);
+      } else {
+        result.push(phrase);
+      }
+    }
+    
+    console.log('Minimal phrase merging:', {
+      originalPhrases: phrases.length,
+      afterMerging: result.length,
+      veryShortThreshold: veryShortThreshold
+    });
+    
+    return result;
   }
 
   calculateBeatMeasureGrid(track, notes) {
@@ -4261,7 +4379,7 @@ class MIDIHumanizer {
   }
 
   adjustZoom(delta) {
-    this.zoomLevel = Math.max(0.5, Math.min(20, (this.zoomLevel || 5) + delta));
+    this.zoomLevel = Math.max(0.5, Math.min(50, (this.zoomLevel || 5) + delta)); // Increased max zoom from 20 to 50
     // Re-render the current visualization mode
     if (this.currentVisualizationMode === 'phrases') {
       this.renderPhraseVisualization();
