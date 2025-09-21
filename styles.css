@@ -329,13 +329,14 @@ button:disabled {
 
 /* User-friendly analysis styles */
 .summary-section {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border-left-color: #667eea;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  color: var(--text-color);
+  border-left-color: var(--secondary-color);
+  border: 1px solid var(--border-color);
 }
 
 .summary-section h4, .summary-section h5 {
-  color: white;
+  color: var(--primary-color);
 }
 
 .friendly-summary {
@@ -343,10 +344,11 @@ button:disabled {
 }
 
 .music-interpretation {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.9);
   border-radius: 8px;
   padding: 1rem;
   margin: 1rem 0;
+  border: 1px solid var(--border-color);
 }
 
 .humanization-effects {
@@ -361,17 +363,19 @@ button:disabled {
 }
 
 .effect-item {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.8);
   padding: 1rem;
   border-radius: 8px;
-  border-left: 3px solid rgba(255, 255, 255, 0.5);
+  border-left: 3px solid var(--secondary-color);
+  border: 1px solid var(--border-color);
 }
 
 .comparison-info {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.8);
   border-radius: 8px;
   padding: 1rem;
   margin: 1rem 0;
+  border: 1px solid var(--border-color);
 }
 
 .comparison-info ul {
