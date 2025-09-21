@@ -379,6 +379,11 @@ class MIDIHumanizer {
   humanizeTrack(track, style, intensity, trackAnalysis = null) {
     const humanizedEvents = [];
     const noteOnEvents = [];
+    let cumulativeDrift = 0; // Track cumulative timing drift
+    const beatTicks = 480; // Standard MIDI beat in ticks
+    
+    // Pre-process to detect chords for micro-arpeggiation
+    const chordGroups = this.detectChordGroups(track);
     
     for (let i = 0; i < track.length; i++) {
       const event = { ...track[i] };
@@ -386,10 +391,35 @@ class MIDIHumanizer {
       if (this.isNoteOn(event)) {
         // Apply intelligent timing humanization based on musical context
         const originalTime = event.time;
-        event.time = this.humanizeTimingIntelligent(event.time, event.data1, style, intensity, trackAnalysis, i);
+        event.time = this.humanizeTimingIntelligent(event.time, event.data1, style, intensity, trackAnalysis, i, cumulativeDrift, beatTicks);
+        
+        // Apply micro-arpeggiation for chords (suggestion from @Kanade-dev)
+        const chordGroup = chordGroups.find(group => 
+          group.events.some(e => e.originalIndex === i)
+        );
+        
+        if (chordGroup && chordGroup.events.length > 2) {
+          const eventInChord = chordGroup.events.find(e => e.originalIndex === i);
+          if (eventInChord) {
+            // Sort notes by pitch for arpeggiation (bottom to top)
+            const sortedNotes = [...chordGroup.events].sort((a, b) => a.pitch - b.pitch);
+            const noteIndex = sortedNotes.findIndex(e => e.originalIndex === i);
+            
+            // Apply micro-timing offset (1-3ms per note)
+            const arpeggiationDelay = noteIndex * intensity * 2; // 0-2 ticks per note
+            event.time += arpeggiationDelay;
+          }
+        }
+        
+        // Update cumulative drift
+        cumulativeDrift += (event.time - originalTime);
         
         // Check for timing conflicts with previous events and resolve
         event.time = this.resolveTimingConflicts(event, humanizedEvents, originalTime);
+        
+        // Apply velocity-timing correlation (suggestion from @Kanade-dev)
+        const velocityTimingAdjustment = this.calculateVelocityTimingCorrelation(event.data2, intensity);
+        event.time += velocityTimingAdjustment;
         
         // Apply intelligent velocity humanization based on musical phrasing
         event.data2 = this.humanizeVelocityIntelligent(event.data2, event.data1, style, intensity, trackAnalysis, i);
@@ -426,6 +456,46 @@ class MIDIHumanizer {
     this.enforceMinimumSpacing(humanizedEvents);
     
     return humanizedEvents;
+  }
+
+  // Detect simultaneous notes for micro-arpeggiation (suggestion from @Kanade-dev)
+  detectChordGroups(track) {
+    const chordGroups = [];
+    const tolerance = 5; // Ticks tolerance for "simultaneous" notes
+    
+    track.forEach((event, index) => {
+      if (this.isNoteOn(event)) {
+        // Find existing chord group or create new one
+        let chordGroup = chordGroups.find(group => 
+          Math.abs(group.time - event.time) <= tolerance
+        );
+        
+        if (!chordGroup) {
+          chordGroup = {
+            time: event.time,
+            events: []
+          };
+          chordGroups.push(chordGroup);
+        }
+        
+        chordGroup.events.push({
+          originalIndex: index,
+          pitch: event.data1,
+          velocity: event.data2,
+          time: event.time
+        });
+      }
+    });
+    
+    return chordGroups;
+  }
+
+  // Calculate velocity-timing correlation (suggestion from @Kanade-dev)
+  calculateVelocityTimingCorrelation(velocity, intensity) {
+    // Strong notes (high velocity) played slightly early, weak notes slightly late
+    const velocityNormalized = (velocity - 64) / 64; // Normalize around middle velocity
+    const timingAdjustment = -velocityNormalized * intensity * 3; // Max 3 ticks adjustment
+    return timingAdjustment;
   }
 
   // Timing conflict resolution methods
@@ -703,25 +773,59 @@ class MIDIHumanizer {
 
   analyzeRhythmicContext(track, style) {
     const beats = {};
-    const beatStrength = [1.0, 0.5, 0.75, 0.5]; // 4/4 beat strengths
+    const beatStrength = [1.0, 0.5, 0.75, 0.5]; // 4/4 beat strengths: Strong-Weak-Medium-Weak
+    const beatAnalysis = {};
     
     track.forEach(event => {
       if (this.isNoteOn(event)) {
-        const beat = Math.floor((event.time / 96) % 4);
-        const subbeat = (event.time / 24) % 4;
+        const measureTime = event.time % (96 * 4); // Time within measure (4 beats)
+        const beatPosition = measureTime / 96; // Float position within measure
+        const beatIndex = Math.floor(beatPosition); // Which beat (0,1,2,3)
+        const subdivision = (beatPosition % 1) * 4; // Subdivision within beat
         
-        if (!beats[beat]) beats[beat] = { count: 0, offbeat: 0 };
-        beats[beat].count++;
+        // Analyze beat strength and timing
+        if (!beatAnalysis[beatIndex]) {
+          beatAnalysis[beatIndex] = { 
+            count: 0, 
+            offbeat: 0, 
+            strength: beatStrength[beatIndex],
+            subdivisions: { onBeat: 0, offBeat: 0 }
+          };
+        }
         
-        // Detect syncopation (notes on weak subdivisions)
-        if (subbeat % 1 !== 0) beats[beat].offbeat++;
+        beatAnalysis[beatIndex].count++;
+        
+        // More precise syncopation detection
+        if (subdivision > 0.1 && subdivision < 0.9) { // Not exactly on beat
+          beatAnalysis[beatIndex].offbeat++;
+          beatAnalysis[beatIndex].subdivisions.offBeat++;
+        } else {
+          beatAnalysis[beatIndex].subdivisions.onBeat++;
+        }
+        
+        // Legacy beats object for compatibility
+        if (!beats[beatIndex]) beats[beatIndex] = { count: 0, offbeat: 0 };
+        beats[beatIndex].count++;
+        if (subdivision > 0.1 && subdivision < 0.9) beats[beatIndex].offbeat++;
       }
     });
 
+    // Calculate weighted syncopation based on beat strength
+    let weightedSyncopation = 0;
+    let totalWeight = 0;
+    Object.entries(beatAnalysis).forEach(([beat, data]) => {
+      const syncopationRatio = data.count > 0 ? data.offbeat / data.count : 0;
+      weightedSyncopation += syncopationRatio * data.strength;
+      totalWeight += data.strength;
+    });
+
     return {
-      beats: beats,
+      beats: beats, // For compatibility
+      beatAnalysis: beatAnalysis,
       syncopation: this.calculateSyncopationLevel(beats),
-      groove: this.identifyGroovePattern(beats, style)
+      weightedSyncopation: totalWeight > 0 ? weightedSyncopation / totalWeight : 0,
+      groove: this.identifyGroovePattern(beats, style),
+      offbeatRatio: this.calculateOffbeatRatio(beatAnalysis)
     };
   }
 
@@ -735,6 +839,19 @@ class MIDIHumanizer {
     });
     
     return total > 0 ? offbeat / total : 0;
+  }
+
+  calculateOffbeatRatio(beatAnalysis) {
+    let totalOnBeat = 0;
+    let totalOffBeat = 0;
+    
+    Object.values(beatAnalysis).forEach(beat => {
+      totalOnBeat += beat.subdivisions.onBeat;
+      totalOffBeat += beat.subdivisions.offBeat;
+    });
+    
+    const total = totalOnBeat + totalOffBeat;
+    return total > 0 ? totalOffBeat / total : 0;
   }
 
   identifyGroovePattern(beats, style) {
@@ -824,12 +941,41 @@ class MIDIHumanizer {
   }
 
   // Intelligent Humanization Functions
-  humanizeTimingIntelligent(time, note, style, intensity, analysis, eventIndex) {
+  humanizeTimingIntelligent(time, note, style, intensity, analysis, eventIndex, cumulativeDrift = 0, beatTicks = 480) {
     let adjustment = this.humanizeTiming(time, style, intensity) - time; // Get base adjustment
     
-    if (!analysis) return time + adjustment;
+    // Beat-aware drift correction: limit cumulative drift to prevent beat loss
+    const maxDriftPerBeat = beatTicks * 0.05; // Max 5% of a beat drift
+    const currentBeat = Math.floor(time / beatTicks);
+    const expectedDriftAtThisBeat = currentBeat * maxDriftPerBeat;
     
-    // Apply phrase-aware timing
+    // If cumulative drift exceeds acceptable limits, apply correction
+    if (Math.abs(cumulativeDrift) > expectedDriftAtThisBeat) {
+      const driftCorrection = -cumulativeDrift * 0.1; // Gradual correction
+      adjustment += driftCorrection;
+    }
+    
+    // Limit maximum adjustment to prevent excessive timing changes
+    const maxAdjustment = beatTicks * 0.02; // Max 2% of a beat per event
+    adjustment = Math.max(-maxAdjustment, Math.min(maxAdjustment, adjustment));
+    
+    if (!analysis) return Math.max(0, time + adjustment);
+
+    // Beat strength analysis for rhythmic accuracy
+    if (analysis.rhythm && analysis.rhythm.beatAnalysis) {
+      const measureTime = time % (beatTicks * 4);
+      const beatPosition = measureTime / beatTicks;
+      const beatIndex = Math.floor(beatPosition);
+      const beatData = analysis.rhythm.beatAnalysis[beatIndex];
+      
+      if (beatData) {
+        // Strong beats (downbeats) should be more accurate
+        const beatStrengthAdjustment = -adjustment * beatData.strength * 0.3;
+        adjustment += beatStrengthAdjustment;
+      }
+    }
+    
+    // Apply phrase-aware timing (reduced intensity to prevent drift)
     const phrase = analysis.phrasing.find(p => 
       time >= p.start && time <= p.end
     );
@@ -837,34 +983,38 @@ class MIDIHumanizer {
     if (phrase) {
       const phrasePosition = (time - phrase.start) / (phrase.end - phrase.start);
       
-      // Subtle ritardando at phrase ends
+      // Subtle ritardando at phrase ends (reduced from intensity * 5 to intensity * 2)
       if (phrasePosition > 0.8) {
-        adjustment += intensity * 5 * phrasePosition;
+        adjustment += intensity * 2 * phrasePosition;
       }
       
-      // Accelerando through phrase climax
+      // Accelerando through phrase climax (reduced from intensity * 2 to intensity * 1)
       if (phrasePosition > 0.3 && phrasePosition < 0.7) {
-        adjustment -= intensity * 2;
+        adjustment -= intensity * 1;
       }
     }
     
-    // Apply chord-based timing adjustments
+    // Enhanced chord-based timing adjustments with dynamic hesitation
     const nearbyChord = analysis.chords.find(c => 
       Math.abs(c.time - time / 96) < 2
     );
     
     if (nearbyChord && nearbyChord.tension > 0.5) {
-      // Slight hesitation before tense harmonies
-      adjustment += intensity * nearbyChord.tension * 3;
+      // Dynamic hesitation based on tension level (suggestion from @Kanade-dev)
+      const hesitationIntensity = nearbyChord.tension * intensity * 2.5;
+      adjustment += hesitationIntensity;
     }
     
-    // Style-specific timing adjustments
-    if (style === 'jazz' && analysis.rhythm.groove.swing) {
+    // Style-specific timing adjustments (reduced intensity)
+    if (style === 'jazz' && analysis.rhythm && analysis.rhythm.groove && analysis.rhythm.groove.swing) {
       const beat = (time / 48) % 2;
       if (beat >= 1) {
-        adjustment += intensity * 8; // Swing eighth notes
+        adjustment += intensity * 4; // Reduced from intensity * 8 to intensity * 4
       }
     }
+    
+    // Final constraint: ensure adjustment doesn't exceed maximum limits
+    adjustment = Math.max(-maxAdjustment, Math.min(maxAdjustment, adjustment));
     
     return Math.max(0, time + adjustment);
   }
@@ -873,6 +1023,13 @@ class MIDIHumanizer {
     let adjustment = this.humanizeVelocity(velocity, style, intensity, note) - velocity;
     
     if (!analysis) return Math.max(1, Math.min(127, velocity + adjustment));
+    
+    // Velocity-timing correlation (suggestion from @Kanade-dev)
+    // Strong notes (high velocity) tend to be played slightly early
+    // Weak notes (low velocity) tend to be played slightly late
+    const velocityNormalized = velocity / 127;
+    const timingInfluence = (velocityNormalized - 0.5) * intensity * 0.1;
+    // This will be used in timing adjustments elsewhere
     
     // Apply melodic peak emphasis
     const melodyNote = analysis.melody.notes.find(m => 
@@ -887,6 +1044,21 @@ class MIDIHumanizer {
       if (peak) {
         // Emphasize melodic peaks
         adjustment += intensity * peak.intensity * 0.3;
+      }
+    }
+
+    // Beat strength emphasis (suggestion from @Kanade-dev)
+    if (analysis.rhythm && analysis.rhythm.beatAnalysis) {
+      const time = eventIndex * 10; // Approximate time
+      const measureTime = time % (96 * 4);
+      const beatPosition = measureTime / 96;
+      const beatIndex = Math.floor(beatPosition);
+      const beatData = analysis.rhythm.beatAnalysis[beatIndex];
+      
+      if (beatData) {
+        // Strong beats get slight velocity boost
+        const beatStrengthBoost = (beatData.strength - 0.5) * intensity * 0.1;
+        adjustment += beatStrengthBoost;
       }
     }
     
@@ -1167,13 +1339,13 @@ class MIDIHumanizer {
     
     // Create a more user-friendly summary first
     html += `<div class="analysis-section summary-section">`;
-    html += `<h4>🎵 楽曲の特徴とヒューマナイズ効果</h4>`;
+    html += `<h4>楽曲の特徴とヒューマナイズ効果</h4>`;
     html += this.createUserFriendlySummary(analysis, style);
     html += `</div>`;
     
     // Add a toggle for detailed technical analysis
     html += `<div class="analysis-section">`;
-    html += `<h4>📊 詳細分析データ <button class="toggle-btn" onclick="document.getElementById('detailed-analysis').classList.toggle('hidden')">表示/非表示</button></h4>`;
+    html += `<h4>詳細分析データ <button class="toggle-btn" onclick="document.getElementById('detailed-analysis').classList.toggle('hidden')">表示/非表示</button></h4>`;
     html += `<div id="detailed-analysis" class="detailed-analysis hidden">`;
     
     // Process each track's analysis with better explanations
@@ -1181,12 +1353,12 @@ class MIDIHumanizer {
       if (trackAnalysis.chords.length === 0 && trackAnalysis.melody.notes.length === 0) return;
       
       html += `<div class="track-analysis">`;
-      html += `<h5>🎼 Track ${trackIndex + 1} の詳細</h5>`;
+      html += `<h5>Track ${trackIndex + 1} の詳細</h5>`;
       
       // Chord Analysis with better explanations
       if (trackAnalysis.chords.length > 0) {
         html += `<div class="analysis-subsection chord-progression">`;
-        html += `<strong>🎹 和音の流れ:</strong> `;
+        html += `<strong>和音の流れ:</strong> `;
         html += this.interpretChordProgression(trackAnalysis.chords);
         html += `</div>`;
       }
@@ -1194,7 +1366,7 @@ class MIDIHumanizer {
       // Melody Analysis with interpretation
       if (trackAnalysis.melody.notes.length > 0) {
         html += `<div class="analysis-subsection melody-analysis">`;
-        html += `<strong>🎵 メロディーライン:</strong> `;
+        html += `<strong>メロディーライン:</strong> `;
         html += this.interpretMelody(trackAnalysis.melody);
         html += `</div>`;
       }
@@ -1202,7 +1374,7 @@ class MIDIHumanizer {
       // Phrase Analysis with timing info
       if (trackAnalysis.phrasing.length > 0) {
         html += `<div class="analysis-subsection phrase-structure">`;
-        html += `<strong>🎭 フレーズ構造:</strong> `;
+        html += `<strong>フレーズ構造:</strong> `;
         html += this.interpretPhrasing(trackAnalysis.phrasing);
         html += `</div>`;
       }
@@ -1210,7 +1382,7 @@ class MIDIHumanizer {
       // Rhythm Analysis with groove explanation
       if (trackAnalysis.rhythm) {
         html += `<div class="analysis-subsection rhythm-analysis">`;
-        html += `<strong>🥁 リズム感:</strong> `;
+        html += `<strong>リズム感:</strong> `;
         html += this.interpretRhythm(trackAnalysis.rhythm, style);
         html += `</div>`;
       }
@@ -1243,31 +1415,31 @@ class MIDIHumanizer {
     }
     
     html += `<div class="music-interpretation">`;
-    html += `<h5>🎼 この楽曲について</h5>`;
+    html += `<h5>この楽曲について</h5>`;
     html += `<p><strong>${musicType}</strong>として認識されました。`;
     html += `${totalTracks}つの音源パートを検出し、<strong>${style}スタイル</strong>でヒューマナイズを適用しました。</p>`;
     html += `</div>`;
     
     // What humanization did
     html += `<div class="humanization-effects">`;
-    html += `<h5>🎨 適用された効果</h5>`;
+    html += `<h5>適用された効果</h5>`;
     html += `<div class="effect-grid">`;
     
     switch(style) {
       case 'classical':
-        html += `<div class="effect-item">🎼 <strong>表現力豊かな演奏</strong><br><small>フレーズの自然な起伏とルバート</small></div>`;
-        html += `<div class="effect-item">🎹 <strong>和声の響きを重視</strong><br><small>不協和音での微妙な間の取り方</small></div>`;
-        html += `<div class="effect-item">🎵 <strong>レガート奏法</strong><br><small>音符同士の滑らかなつながり</small></div>`;
+        html += `<div class="effect-item"><strong>表現力豊かな演奏</strong><br><small>フレーズの自然な起伏とルバート</small></div>`;
+        html += `<div class="effect-item"><strong>和声の響きを重視</strong><br><small>不協和音での微妙な間の取り方</small></div>`;
+        html += `<div class="effect-item"><strong>レガート奏法</strong><br><small>音符同士の滑らかなつながり</small></div>`;
         break;
       case 'jazz':
-        html += `<div class="effect-item">🎷 <strong>スウィング感</strong><br><small>8分音符の跳ねるようなリズム</small></div>`;
-        html += `<div class="effect-item">🎶 <strong>シンコペーション強調</strong><br><small>裏拍のアクセントと緊張感</small></div>`;
-        html += `<div class="effect-item">🎹 <strong>アーティキュレーション</strong><br><small>音符の歯切れ良い表現</small></div>`;
+        html += `<div class="effect-item"><strong>スウィング感</strong><br><small>8分音符の跳ねるようなリズム</small></div>`;
+        html += `<div class="effect-item"><strong>シンコペーション強調</strong><br><small>裏拍のアクセントと緊張感</small></div>`;
+        html += `<div class="effect-item"><strong>アーティキュレーション</strong><br><small>音符の歯切れ良い表現</small></div>`;
         break;
       case 'pop':
-        html += `<div class="effect-item">🎤 <strong>グルーヴ感重視</strong><br><small>一定のビート感を保った演奏</small></div>`;
-        html += `<div class="effect-item">🎸 <strong>コード感の強化</strong><br><small>ポップスらしい和音の響き</small></div>`;
-        html += `<div class="effect-item">🎵 <strong>歌いやすい表現</strong><br><small>メロディーの自然な流れ</small></div>`;
+        html += `<div class="effect-item"><strong>グルーヴ感重視</strong><br><small>一定のビート感を保った演奏</small></div>`;
+        html += `<div class="effect-item"><strong>コード感の強化</strong><br><small>ポップスらしい和音の響き</small></div>`;
+        html += `<div class="effect-item"><strong>歌いやすい表現</strong><br><small>メロディーの自然な流れ</small></div>`;
         break;
     }
     
@@ -1275,7 +1447,7 @@ class MIDIHumanizer {
     
     // Before/After comparison info
     html += `<div class="comparison-info">`;
-    html += `<h5>🔄 変化のポイント</h5>`;
+    html += `<h5>変化のポイント</h5>`;
     html += `<ul>`;
     html += `<li><strong>タイミング:</strong> 機械的な正確さから人間らしい微妙なズレに変更</li>`;
     html += `<li><strong>音量:</strong> 一定の強さからフレーズに応じた自然な強弱に変更</li>`;
@@ -1319,60 +1491,149 @@ class MIDIHumanizer {
     
     const range = melody.range;
     const peaks = melody.peaks.length;
+    const notes = melody.notes;
+    
+    // Analyze intervallic content
+    let stepMotion = 0;
+    let leapMotion = 0;
+    for (let i = 1; i < notes.length; i++) {
+      const interval = Math.abs(notes[i].pitch - notes[i-1].pitch);
+      if (interval <= 2) stepMotion++;
+      else if (interval >= 4) leapMotion++;
+    }
+    
+    const stepRatio = stepMotion / Math.max(1, notes.length - 1);
+    const leapRatio = leapMotion / Math.max(1, notes.length - 1);
+    
+    // Analyze pitch direction trends
+    let ascending = 0;
+    let descending = 0;
+    for (let i = 1; i < notes.length; i++) {
+      if (notes[i].pitch > notes[i-1].pitch) ascending++;
+      else if (notes[i].pitch < notes[i-1].pitch) descending++;
+    }
     
     let interpretation = '';
     
+    // Range analysis
     if (range > 24) {
-      interpretation += '広い音域を使った表現豊かなメロディーです。';
+      interpretation += '広い音域(2オクターブ以上)を活用した';
     } else if (range > 12) {
-      interpretation += '程よい音域で歌いやすいメロディーです。';
+      interpretation += '1オクターブ程度の適度な音域の';
     } else {
-      interpretation += '狭い音域で親しみやすいメロディーです。';
+      interpretation += '狭い音域に収まった';
     }
     
-    if (peaks > melody.notes.length * 0.1) {
-      interpretation += ' 起伏に富んだドラマチックな展開があります。';
+    // Motion analysis
+    if (stepRatio > 0.7) {
+      interpretation += '順次進行中心の滑らかなメロディー';
+    } else if (leapRatio > 0.3) {
+      interpretation += '跳躍進行を含む動的なメロディー';
     } else {
-      interpretation += ' 穏やかで流れるような展開です。';
+      interpretation += 'バランスの取れたメロディー';
     }
     
-    return interpretation;
+    // Contour analysis
+    if (ascending > descending * 1.5) {
+      interpretation += '。全体的に上昇傾向';
+    } else if (descending > ascending * 1.5) {
+      interpretation += '。全体的に下降傾向';
+    }
+    
+    // Peak analysis (more sophisticated)
+    const peakDensity = peaks / Math.max(1, notes.length);
+    if (peakDensity > 0.15) {
+      interpretation += 'で、起伏に富んだ表情豊かな展開';
+    } else if (peakDensity < 0.05) {
+      interpretation += 'で、穏やかで安定した展開';
+    }
+    
+    return interpretation + 'です。';
   }
 
   interpretPhrasing(phrasing) {
     if (phrasing.length === 0) return 'フレーズ構造が検出されませんでした。';
     
-    const avgLength = phrasing.reduce((sum, p) => sum + (p.end - p.start), 0) / phrasing.length / 96;
+    // More sophisticated analysis of phrase structure
+    const phraseLengths = phrasing.map(p => (p.end - p.start) / 96); // Convert to beats
+    const avgLength = phraseLengths.reduce((sum, len) => sum + len, 0) / phrasing.length;
+    const lengthVariance = phraseLengths.reduce((sum, len) => sum + Math.pow(len - avgLength, 2), 0) / phrasing.length;
+    const lengthStdDev = Math.sqrt(lengthVariance);
     
-    let interpretation = `${phrasing.length}つのフレーズに分かれています。`;
-    
-    if (avgLength > 8) {
-      interpretation += ' 長めのフレーズでゆったりとした印象です。';
-    } else if (avgLength > 4) {
-      interpretation += ' 標準的な長さのフレーズで聴きやすい構成です。';
-    } else {
-      interpretation += ' 短めのフレーズでテンポ感のある構成です。';
+    // Analyze phrase overlap and gaps
+    let hasOverlaps = false;
+    let hasGaps = false;
+    for (let i = 1; i < phrasing.length; i++) {
+      const gap = phrasing[i].start - phrasing[i-1].end;
+      if (gap < 0) hasOverlaps = true;
+      if (gap > 96) hasGaps = true; // More than 1 beat gap
     }
     
-    return interpretation;
+    let interpretation = `${phrasing.length}つのフレーズを検出。`;
+    
+    // More nuanced length analysis
+    if (lengthStdDev > 2) {
+      interpretation += '長さが大きく変化する変化に富んだ構成';
+    } else if (avgLength > 8) {
+      interpretation += '長めのフレーズによる展開重視の構成';
+    } else if (avgLength > 4) {
+      interpretation += 'バランスの取れたフレーズ構成';
+    } else {
+      interpretation += '短いフレーズによる区切りの明確な構成';
+    }
+    
+    // Add structural characteristics
+    if (hasOverlaps) {
+      interpretation += '。フレーズ間のつながりが密接';
+    } else if (hasGaps) {
+      interpretation += '。フレーズ間に明確な区切り';
+    }
+    
+    return interpretation + 'です。';
   }
 
   interpretRhythm(rhythm, style) {
     let interpretation = '';
     
-    if (rhythm.syncopation > 0.3) {
-      interpretation += '裏拍を効かせたリズミカルな楽曲です。';
+    // Analyze actual rhythmic content
+    const syncopationLevel = rhythm.syncopation || 0;
+    const offbeatRatio = rhythm.offbeatRatio || 0;
+    
+    // Base rhythm character analysis
+    if (syncopationLevel > 0.4) {
+      interpretation += '高度にシンコペートされたリズム';
+    } else if (syncopationLevel > 0.2) {
+      interpretation += '適度なシンコペーションを含むリズム';
     } else {
-      interpretation += 'ストレートで分かりやすいリズムの楽曲です。';
+      interpretation += 'ストレートなリズム';
     }
     
-    if (rhythm.groove && rhythm.groove.swing) {
-      interpretation += ' スウィング感のあるグルーヴが特徴的です。';
-    } else {
-      interpretation += ' 一定のビート感を保った安定したリズムです。';
+    // Offbeat analysis
+    if (offbeatRatio > 0.3) {
+      interpretation += 'で、裏拍の強調が特徴的';
+    } else if (offbeatRatio > 0.1) {
+      interpretation += 'で、バランスの取れた拍感';
     }
     
-    return interpretation;
+    // Groove analysis based on actual patterns, not just style
+    if (rhythm.groove) {
+      if (rhythm.groove.swing && syncopationLevel > 0.2) {
+        interpretation += '。実際のスウィング感が検出されました';
+      } else if (rhythm.groove.straight && syncopationLevel < 0.1) {
+        interpretation += '。安定したストレートビートが特徴';
+      }
+    }
+    
+    // Add style context only if it matches the detected content
+    if (style === 'jazz' && syncopationLevel > 0.2) {
+      interpretation += '(ジャズスタイルに適した特徴)';
+    } else if (style === 'classical' && syncopationLevel < 0.1) {
+      interpretation += '(クラシカルな整然とした特徴)';
+    } else if (style === 'pop' && offbeatRatio > 0.1 && syncopationLevel < 0.3) {
+      interpretation += '(ポップス的なバランス)';
+    }
+    
+    return interpretation + 'です。';
   }
 
   // Update button states during playback
