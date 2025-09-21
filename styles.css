@@ -977,3 +977,112 @@ button:disabled {
     height: 100px;
   }
 }
+/* Integrated Playback Controls */
+.integrated-playback-controls {
+  background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+  padding: 1.5rem;
+  border-radius: 12px;
+  margin-bottom: 1.5rem;
+  border: 2px solid rgba(37, 99, 235, 0.1);
+  box-shadow: var(--light-shadow);
+}
+
+.integrated-playback-controls .playback-controls {
+  margin-bottom: 1rem;
+}
+
+.integrated-playback-controls .play-button {
+  background: var(--gradient-primary);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  min-width: 140px;
+  transition: all 0.3s ease;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.integrated-playback-controls .play-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+/* Playback Progress Bar */
+.playback-progress-container {
+  margin-top: 1rem;
+}
+
+.playback-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.playback-progress {
+  height: 100%;
+  background: var(--gradient-accent);
+  width: 0%;
+  transition: width 0.1s ease;
+  border-radius: 4px;
+  box-shadow: 0 0 8px rgba(255, 68, 68, 0.4);
+}
+
+.playback-progress-container small {
+  color: #64748b;
+  font-size: 0.85rem;
+  display: block;
+  text-align: center;
+  margin-top: 0.5rem;
+}
+
+/* Progress Indicator in Visualization */
+.playback-progress-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(to bottom, #ff4444, #ff6666);
+  z-index: 100;
+  box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
+  border-radius: 2px;
+  pointer-events: none;
+  animation: pulseProgress 1.5s ease-in-out infinite;
+}
+
+@keyframes pulseProgress {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(255, 68, 68, 1), 0 0 32px rgba(255, 68, 68, 0.6);
+  }
+}
+
+/* MIDI Visualization Subsection */
+.midi-visualization-subsection {
+  background: linear-gradient(135deg, #ffffff 0%, #fafbfc 100%);
+  padding: 2rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.midi-visualization-subsection h3 {
+  color: var(--primary-color);
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1.5rem;
+  text-align: center;
+  border-bottom: 3px solid var(--secondary-color);
+  padding-bottom: 0.75rem;
+}
+
+.midi-visualization-container {
+  margin-top: 1rem;
+  min-height: 300px;
+}
