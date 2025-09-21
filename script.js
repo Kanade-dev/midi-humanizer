@@ -49,84 +49,54 @@ class MIDIHumanizer {
     }
   }
 
-  // Advanced synthesizer for smooth MIDI note playback
+  // Lightweight synthesizer for efficient MIDI note playback (inspired by Picotune approach)
   createPianoNote(frequency, velocity = 64, startTime, duration = 1000) {
     if (!this.audioContext) return null;
 
-    // Calculate timing values first
-    const noteDuration = duration / 1000;
-    const releaseTime = Math.max(1.5, noteDuration * 0.6); // Longer release, minimum 1.5 seconds
+    // Calculate timing values
+    const noteDuration = Math.min(duration / 1000, 2.0); // Cap max duration
+    const releaseTime = Math.min(0.3, noteDuration * 0.3); // Much shorter release
 
-    // Create multiple oscillators for richer piano-like sound
-    const fundamental = this.audioContext.createOscillator();
-    const harmonic2 = this.audioContext.createOscillator();
-    const harmonic3 = this.audioContext.createOscillator();
+    // Use single oscillator for better performance (like PicoAudio.js approach)
+    const oscillator = this.audioContext.createOscillator();
+    const gainNode = this.audioContext.createGain();
     
-    // Create gain nodes for each oscillator
-    const fundamentalGain = this.audioContext.createGain();
-    const harmonic2Gain = this.audioContext.createGain();
-    const harmonic3Gain = this.audioContext.createGain();
-    const masterGain = this.audioContext.createGain();
-    
-    // Track all nodes for cleanup
-    const totalDuration = Math.max(noteDuration * 0.7, 0.3) + releaseTime + 0.1;
+    // Track nodes for cleanup with shorter duration
+    const totalDuration = noteDuration + releaseTime + 0.05;
     
     const nodes = {
-      oscillators: [fundamental, harmonic2, harmonic3], 
-      gains: [fundamentalGain, harmonic2Gain, harmonic3Gain, masterGain],
+      oscillators: [oscillator], 
+      gains: [gainNode],
       startTime: startTime,
       endTime: startTime + totalDuration
     };
     this.activeAudioNodes.push(nodes);
     
-    // Configure oscillators for piano-like timbre
-    fundamental.type = 'sine';
-    harmonic2.type = 'triangle';
-    harmonic3.type = 'sawtooth';
+    // Simple but effective waveform for piano-like sound
+    oscillator.type = 'triangle'; // Triangle wave sounds more piano-like than multiple oscillators
+    oscillator.frequency.setValueAtTime(frequency, startTime);
     
-    fundamental.frequency.setValueAtTime(frequency, startTime);
-    harmonic2.frequency.setValueAtTime(frequency * 2.01, startTime); // Slightly detuned for realism
-    harmonic3.frequency.setValueAtTime(frequency * 3.02, startTime);
+    // Simpler volume calculation
+    const baseVolume = Math.max(0.1, Math.min(0.6, velocity / 127 * 0.4));
     
-    // Set relative volumes for harmonics
-    const baseVolume = Math.max(0.05, Math.min(0.8, velocity / 127 * 0.5));
-    fundamentalGain.gain.setValueAtTime(baseVolume, startTime);
-    harmonic2Gain.gain.setValueAtTime(baseVolume * 0.3, startTime);
-    harmonic3Gain.gain.setValueAtTime(baseVolume * 0.1, startTime);
+    // Simplified envelope (faster attack, quick decay, no sustain complexity)
+    const attackTime = 0.005; // Very quick attack
+    const decayTime = Math.min(0.05, noteDuration * 0.1); // Proportional but capped decay
     
-    // Create realistic piano envelope (ADSR)
-    const attackTime = 0.01; // Quick attack for piano
-    const decayTime = 0.1; // Fixed decay time for consistent piano sound
-    const sustainLevel = baseVolume * 0.7; // Higher sustain level
+    // Simple envelope (inspired by lightweight MIDI players like Picotune)
+    gainNode.gain.setValueAtTime(0, startTime);
+    gainNode.gain.linearRampToValueAtTime(baseVolume, startTime + attackTime);
+    gainNode.gain.linearRampToValueAtTime(baseVolume * 0.8, startTime + attackTime + decayTime);
+    gainNode.gain.setValueAtTime(baseVolume * 0.8, startTime + noteDuration);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + noteDuration + releaseTime);
     
-    masterGain.gain.setValueAtTime(0, startTime);
-    masterGain.gain.linearRampToValueAtTime(baseVolume, startTime + attackTime);
-    masterGain.gain.exponentialRampToValueAtTime(sustainLevel, startTime + attackTime + decayTime);
+    // Connect audio graph
+    oscillator.connect(gainNode);
+    gainNode.connect(this.audioContext.destination);
     
-    // Piano-like natural decay: hold sustain level during note, then slow release
-    const releaseStart = startTime + Math.max(noteDuration * 0.7, 0.3); // Start release before note ends
-    masterGain.gain.exponentialRampToValueAtTime(sustainLevel, releaseStart);
-    masterGain.gain.exponentialRampToValueAtTime(0.001, releaseStart + releaseTime);
-    
-    // Connect the audio graph
-    fundamental.connect(fundamentalGain);
-    harmonic2.connect(harmonic2Gain);
-    harmonic3.connect(harmonic3Gain);
-    
-    fundamentalGain.connect(masterGain);
-    harmonic2Gain.connect(masterGain);
-    harmonic3Gain.connect(masterGain);
-    masterGain.connect(this.audioContext.destination);
-    
-    // Schedule oscillator start and stop with precise timing
-    fundamental.start(startTime);
-    harmonic2.start(startTime);
-    harmonic3.start(startTime);
-    
-    // Stop oscillators after the complete envelope (including release)
-    fundamental.stop(startTime + totalDuration);
-    harmonic2.stop(startTime + totalDuration);
-    harmonic3.stop(startTime + totalDuration);
+    // Schedule oscillator with shorter, more efficient timing
+    oscillator.start(startTime);
+    oscillator.stop(startTime + totalDuration);
     
     return nodes;
   }
@@ -3772,28 +3742,158 @@ class MIDIHumanizer {
     
     const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
     const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
+    const phrases = this.lastAnalysis?.tracks[0]?.phrasing || [];
+    
+    // Calculate total duration and scale
+    const totalDuration = Math.max(
+      originalNotes.length > 0 ? Math.max(...originalNotes.map(n => n.time + n.duration)) : 0,
+      humanizedNotes.length > 0 ? Math.max(...humanizedNotes.map(n => n.time + n.duration)) : 0
+    ) || 1000; // Default 1 second if no notes
+    
+    // Initialize zoom if not set
+    if (!this.timelineZoom) this.timelineZoom = 1;
+    const zoomedWidth = 100 * this.timelineZoom; // Base width percentage times zoom
     
     canvas.innerHTML = `
-      <div class="simple-timeline">
-        <h4>MIDI タイムライン表示</h4>
+      <div class="integrated-timeline">
+        <h4>MIDI タイムライン表示（フレーズ構造統合）</h4>
+        <div class="timeline-controls" style="margin-bottom: 1rem;">
+          <button onclick="midiHumanizer.adjustTimelineZoom(-0.5)" class="zoom-button" style="margin-right: 0.5rem; padding: 0.3rem 0.7rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer;">ズームアウト</button>
+          <button onclick="midiHumanizer.adjustTimelineZoom(0.5)" class="zoom-button" style="margin-right: 0.5rem; padding: 0.3rem 0.7rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer;">ズームイン</button>
+          <button onclick="midiHumanizer.resetTimelineZoom()" class="zoom-button" style="padding: 0.3rem 0.7rem; background: var(--accent); color: white; border: none; border-radius: 4px; cursor: pointer;">リセット</button>
+          <span style="margin-left: 1rem; color: var(--text-light);">ズーム: ${(this.timelineZoom * 100).toFixed(0)}%</span>
+        </div>
         <div class="timeline-info">
           <div class="timeline-stats">
             <span>オリジナル: <strong>${originalNotes.length}</strong> ノート</span>
             <span>ヒューマナイズ後: <strong>${humanizedNotes.length}</strong> ノート</span>
+            <span>フレーズ数: <strong>${phrases.length}</strong></span>
           </div>
         </div>
-        <div class="timeline-representation">
-          <div class="timeline-track">
-            <div class="timeline-label">オリジナル</div>
-            <div class="timeline-bar" style="background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%); height: 12px; border-radius: 6px; margin: 0.5rem 0;"></div>
-          </div>
-          <div class="timeline-track">
-            <div class="timeline-label">ヒューマナイズ後</div>
-            <div class="timeline-bar" style="background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%); height: 12px; border-radius: 6px; margin: 0.5rem 0;"></div>
-          </div>
+        <div class="timeline-container" style="overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 1rem;">
+          ${this.renderIntegratedTimelineContent(originalNotes, humanizedNotes, phrases, totalDuration, zoomedWidth)}
         </div>
       </div>
     `;
+  }
+  
+  renderIntegratedTimelineContent(originalNotes, humanizedNotes, phrases, totalDuration, width) {
+    return `
+      <div class="timeline-content" style="position: relative; width: ${width}%; min-width: 600px;">
+        <!-- Phrase boundaries background -->
+        <div class="phrase-boundaries" style="position: absolute; top: 0; left: 0; right: 0; height: 120px; z-index: 1;">
+          ${phrases.map((phrase, index) => {
+            const startPercent = (phrase.start / totalDuration) * 100;
+            const widthPercent = ((phrase.end - phrase.start) / totalDuration) * 100;
+            const colors = ['rgba(52, 152, 219, 0.1)', 'rgba(155, 89, 182, 0.1)', 'rgba(46, 204, 113, 0.1)', 'rgba(241, 196, 15, 0.1)'];
+            const borderColors = ['rgba(52, 152, 219, 0.5)', 'rgba(155, 89, 182, 0.5)', 'rgba(46, 204, 113, 0.5)', 'rgba(241, 196, 15, 0.5)'];
+            return `
+              <div class="phrase-region" style="
+                position: absolute; 
+                left: ${startPercent}%; 
+                width: ${widthPercent}%; 
+                height: 100%; 
+                background: ${colors[index % colors.length]}; 
+                border-left: 2px solid ${borderColors[index % borderColors.length]};
+                border-right: 1px dashed ${borderColors[index % borderColors.length]};
+              ">
+                <div style="position: absolute; top: -18px; left: 2px; font-size: 0.8rem; font-weight: 600; color: var(--text); background: white; padding: 0.1rem 0.3rem; border-radius: 2px;">
+                  フレーズ${index + 1}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        
+        <!-- Original track -->
+        <div class="timeline-track" style="position: relative; margin: 1.5rem 0; z-index: 2;">
+          <div class="timeline-label" style="font-weight: 600; margin-bottom: 0.5rem;">オリジナル</div>
+          <div class="timeline-bar" style="position: relative; background: #f0f0f0; height: 20px; border-radius: 10px;">
+            ${originalNotes.map(note => {
+              const startPercent = (note.time / totalDuration) * 100;
+              const widthPercent = Math.max(0.5, (note.duration / totalDuration) * 100);
+              const intensity = note.velocity / 127;
+              return `
+                <div class="note-block" style="
+                  position: absolute; 
+                  left: ${startPercent}%; 
+                  width: ${widthPercent}%; 
+                  height: 100%; 
+                  background: linear-gradient(90deg, 
+                    rgba(52, 152, 219, ${0.3 + intensity * 0.5}) 0%, 
+                    rgba(52, 152, 219, ${0.5 + intensity * 0.5}) 100%
+                  ); 
+                  border-radius: 10px;
+                  border: 1px solid rgba(52, 152, 219, 0.8);
+                "></div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        
+        <!-- Humanized track -->
+        <div class="timeline-track" style="position: relative; margin: 1.5rem 0; z-index: 2;">
+          <div class="timeline-label" style="font-weight: 600; margin-bottom: 0.5rem;">ヒューマナイズ後</div>
+          <div class="timeline-bar" style="position: relative; background: #f0f0f0; height: 20px; border-radius: 10px;">
+            ${humanizedNotes.map(note => {
+              const startPercent = (note.time / totalDuration) * 100;
+              const widthPercent = Math.max(0.5, (note.duration / totalDuration) * 100);
+              const intensity = note.velocity / 127;
+              return `
+                <div class="note-block" style="
+                  position: absolute; 
+                  left: ${startPercent}%; 
+                  width: ${widthPercent}%; 
+                  height: 100%; 
+                  background: linear-gradient(90deg, 
+                    rgba(231, 76, 60, ${0.3 + intensity * 0.5}) 0%, 
+                    rgba(231, 76, 60, ${0.5 + intensity * 0.5}) 100%
+                  ); 
+                  border-radius: 10px;
+                  border: 1px solid rgba(231, 76, 60, 0.8);
+                "></div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        
+        <!-- Time scale -->
+        <div class="time-scale" style="margin-top: 1rem; height: 20px; position: relative; border-top: 1px solid var(--border);">
+          ${this.generateTimeScale(totalDuration, width)}
+        </div>
+      </div>
+    `;
+  }
+  
+  generateTimeScale(totalDuration, width) {
+    const marks = [];
+    const seconds = totalDuration / 1000;
+    const interval = seconds > 10 ? 2 : (seconds > 5 ? 1 : 0.5);
+    
+    for (let t = 0; t <= seconds; t += interval) {
+      const percent = (t / seconds) * 100;
+      marks.push(`
+        <div style="position: absolute; left: ${percent}%; top: 0; border-left: 1px solid var(--border); height: 8px;"></div>
+        <div style="position: absolute; left: ${percent}%; top: 10px; font-size: 0.7rem; color: var(--text-light); transform: translateX(-50%);">${t.toFixed(1)}s</div>
+      `);
+    }
+    
+    return marks.join('');
+  }
+  
+  // Zoom control methods
+  adjustTimelineZoom(delta) {
+    this.timelineZoom = Math.max(0.5, Math.min(5, (this.timelineZoom || 1) + delta));
+    if (this.currentVisualizationMode === 'timeline') {
+      this.renderLightweightTimeline();
+    }
+  }
+  
+  resetTimelineZoom() {
+    this.timelineZoom = 1;
+    if (this.currentVisualizationMode === 'timeline') {
+      this.renderLightweightTimeline();
+    }
   }
 
   renderLightweightPhrases() {
@@ -3804,20 +3904,31 @@ class MIDIHumanizer {
     
     canvas.innerHTML = `
       <div class="simple-phrases">
-        <h4>フレーズ構造表示</h4>
+        <h4>フレーズ構造分析</h4>
         <div class="phrase-overview">
           <p>検出されたフレーズ数: <strong>${phrases.length}</strong></p>
           <p>平均フレーズ長: <strong>${this.calculateAveragePhraseLength(phrases).toFixed(1)}秒</strong></p>
+          <p style="margin-top: 0.5rem; color: var(--text-light); font-size: 0.9rem;">
+            <strong>Tip:</strong> タイムライン表示でフレーズの位置と構造を確認できます
+          </p>
         </div>
-        <div class="phrase-blocks" style="display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap;">
+        <div class="phrase-details" style="margin-top: 1.5rem;">
           ${phrases.map((phrase, index) => {
             const duration = ((phrase.end - phrase.start) / 480).toFixed(1);
             const noteCount = phrase.notes?.length || 0;
+            const startTime = (phrase.start / 480).toFixed(1);
+            const endTime = (phrase.end / 480).toFixed(1);
             return `
-              <div class="phrase-block" style="flex: 1; min-width: 120px; background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%); color: white; padding: 1rem; border-radius: var(--radius); text-align: center;">
-                <div class="phrase-label" style="font-weight: 600; margin-bottom: 0.25rem;">フレーズ ${index + 1}</div>
-                <div class="phrase-duration" style="font-size: 0.9rem;">${duration}秒</div>
-                <div class="phrase-notes" style="font-size: 0.8rem; opacity: 0.8;">${noteCount}音</div>
+              <div class="phrase-detail" style="background: var(--bg-secondary); border-left: 4px solid var(--primary); padding: 1rem; margin-bottom: 0.5rem; border-radius: 0 var(--radius) var(--radius) 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                  <strong style="color: var(--primary);">フレーズ ${index + 1}</strong>
+                  <span style="font-size: 0.9rem; color: var(--text-light);">${startTime}s - ${endTime}s</span>
+                </div>
+                <div style="display: flex; gap: 1rem; font-size: 0.9rem;">
+                  <span>長さ: <strong>${duration}秒</strong></span>
+                  <span>音数: <strong>${noteCount}音</strong></span>
+                  <span>密度: <strong>${(noteCount / parseFloat(duration)).toFixed(1)}音/秒</strong></span>
+                </div>
               </div>
             `;
           }).join('')}
