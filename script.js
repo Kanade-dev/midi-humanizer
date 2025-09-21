@@ -870,23 +870,30 @@ class MIDIHumanizer {
 
   identifyPhraseBoundaries(track) {
     const noteEvents = track.filter(event => this.isNoteOn(event));
-    if (noteEvents.length < 2) return [{ start: 0, end: noteEvents[0]?.time || 0, notes: noteEvents }];
+    if (noteEvents.length < 4) return [{ start: 0, end: noteEvents[noteEvents.length - 1]?.time || 0, notes: noteEvents }];
     
     // Extract notes with durations
     const notes = this.extractNotesFromTrack(track);
-    if (notes.length < 2) return [{ start: 0, end: notes[0]?.endTime || 0, notes: noteEvents }];
+    if (notes.length < 4) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
     
     // Get chord analysis for cadence scoring
     const chords = this.analyzeChordProgression(track);
     
-    // Generate boundary candidates (between each pair of notes)
+    // Generate boundary candidates (with minimum spacing to reduce granularity)
     const candidates = [];
-    for (let i = 0; i < notes.length - 1; i++) {
-      candidates.push({
-        index: i,
-        time: notes[i].endTime,
-        nextTime: notes[i + 1].startTime
-      });
+    const minPhraseLength = 480 * 2; // Minimum 2 beats between phrases
+    let lastTime = 0;
+    
+    for (let i = 2; i < notes.length - 2; i++) { // Start from 2nd note, end 2 notes before end
+      const candidateTime = notes[i].endTime;
+      if (candidateTime - lastTime >= minPhraseLength) {
+        candidates.push({
+          index: i,
+          time: candidateTime,
+          nextTime: notes[i + 1].startTime
+        });
+        lastTime = candidateTime;
+      }
     }
     
     // Score each candidate using multiple criteria
@@ -895,12 +902,12 @@ class MIDIHumanizer {
       return { ...candidate, score };
     });
     
-    // Set configurable weights (adjustable parameters as suggested)
+    // Set configurable weights for more cohesive phrases
     const weights = {
-      gap: 2.0,        // w1: ギャップ・スコア
-      duration: 1.0,   // w2: 先行音符の長さスコア  
-      contour: 0.5,    // w3: メロディ輪郭スコア
-      cadence: 3.0     // w4: カデンツ・スコア (most important)
+      gap: 3.0,        // w1: ギャップ・スコア (increased importance)
+      duration: 1.5,   // w2: 先行音符の長さスコア  
+      contour: 1.0,    // w3: メロディ輪郭スコア
+      cadence: 4.0     // w4: カデンツ・スコア (most important)
     };
     
     // Calculate weighted total scores
@@ -912,8 +919,8 @@ class MIDIHumanizer {
         (weights.cadence * candidate.score.cadence);
     });
     
-    // Set threshold for boundary detection (adjustable parameter)
-    const threshold = 0.3; // Lowered from 0.6 to detect more boundaries
+    // Set higher threshold for more cohesive phrases
+    const threshold = 0.8; // Increased from 0.3 to detect fewer, stronger boundaries
     
     // Debug: Log scoring information for development
     if (scoredCandidates.length > 0) {
@@ -926,10 +933,13 @@ class MIDIHumanizer {
       });
     }
     
-    // Select boundaries above threshold
+    // Select boundaries above threshold, limit to maximum of 3 phrases for simpler structure
     const boundaries = scoredCandidates
       .filter(candidate => candidate.totalScore > threshold)
-      .map(candidate => candidate.time);
+      .sort((a, b) => b.totalScore - a.totalScore) // Sort by score (highest first)
+      .slice(0, 2) // Maximum 2 boundaries = 3 phrases
+      .map(candidate => candidate.time)
+      .sort((a, b) => a - b); // Sort by time
     
     // Create phrases from boundaries
     return this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
@@ -2054,9 +2064,18 @@ class MIDIHumanizer {
     const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
     const phrases = this.lastAnalysis.tracks[0].phrasing;
     
+    // Initialize zoom level if not set
+    if (!this.zoomLevel) this.zoomLevel = 1;
+    
     canvas.innerHTML = `
       <div class="timeline-container">
         <h4>MIDIタイムライン表示</h4>
+        <div class="timeline-controls">
+          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(-0.5)">ズームアウト</button>
+          <span class="zoom-level">縮尺: ${this.zoomLevel.toFixed(1)}x</span>
+          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(0.5)">ズームイン</button>
+          <button class="zoom-control" onclick="midiHumanizer.resetZoom()">リセット</button>
+        </div>
         <div class="timeline-track">
           ${this.renderNoteTimeline(originalNotes, phrases)}
         </div>
@@ -2160,13 +2179,17 @@ class MIDIHumanizer {
     const maxPitch = Math.max(...notes.map(n => n.pitch));
     const pitchRange = maxPitch - minPitch;
     
-    let html = '<div class="timeline-notes">';
+    // Apply zoom level
+    const zoomLevel = this.zoomLevel || 1;
+    const timelineWidth = 100 * zoomLevel;
+    
+    let html = `<div class="timeline-notes" style="width: ${timelineWidth}%;">`;
     
     // Render notes
     notes.forEach((note, index) => {
       const left = (note.startTime / maxTime) * 100;
-      const width = ((note.endTime - note.startTime) / maxTime) * 100;
-      const top = ((maxPitch - note.pitch) / Math.max(1, pitchRange)) * 100;
+      const width = Math.max(0.5, ((note.endTime - note.startTime) / maxTime) * 100);
+      const top = ((maxPitch - note.pitch) / Math.max(1, pitchRange)) * 80 + 10; // Keep some margin
       const intensity = note.velocity / 127;
       
       html += `
@@ -2200,6 +2223,16 @@ class MIDIHumanizer {
     
     html += '</div>';
     return html;
+  }
+
+  adjustZoom(delta) {
+    this.zoomLevel = Math.max(0.5, Math.min(5, (this.zoomLevel || 1) + delta));
+    this.renderTimelineVisualization();
+  }
+
+  resetZoom() {
+    this.zoomLevel = 1;
+    this.renderTimelineVisualization();
   }
 
   renderTimeRuler(notes) {
