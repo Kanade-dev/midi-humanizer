@@ -128,6 +128,11 @@ class MIDIHumanizer {
     if (progress > 0 && this.isPlaying) {
       const indicator = document.createElement('div');
       indicator.className = 'playback-progress-indicator';
+      
+      // Calculate position accounting for zoom level
+      const zoomLevel = this.zoomLevel || 1;
+      const adjustedProgress = progress * zoomLevel;
+      
       indicator.style.cssText = `
         position: absolute;
         top: 0;
@@ -136,7 +141,7 @@ class MIDIHumanizer {
         background: linear-gradient(to bottom, #ff4444, #ff6666);
         z-index: 1000;
         box-shadow: 0 0 8px rgba(255, 68, 68, 0.6);
-        left: ${progress * 100}%;
+        left: ${adjustedProgress * 100}%;
         pointer-events: none;
         border-radius: 2px;
       `;
@@ -1121,7 +1126,7 @@ class MIDIHumanizer {
       // Check if this is a local maximum with significant score
       if (current.weightedScore > prev.weightedScore && 
           current.weightedScore > next.weightedScore &&
-          current.weightedScore > 0.3) { // Threshold for significance
+          current.weightedScore > 0.15) { // Lowered threshold for better phrase detection
         
         // Ensure minimum distance from previous peak
         if (peaks.length === 0 || current.time - peaks[peaks.length - 1] >= minPhraseLength) {
@@ -2361,6 +2366,8 @@ class MIDIHumanizer {
     
     this.currentVisualizationMode = 'timeline';
     this.setupVisualizationContainer();
+    // Auto-expand visualizer by showing timeline by default
+    this.showVisualization('timeline');
   }
 
   setupVisualizationContainer() {
@@ -2431,6 +2438,7 @@ class MIDIHumanizer {
     if (!canvas) return;
     
     const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
+    const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
     const phrases = this.lastAnalysis.tracks[0].phrasing;
     
     // Initialize zoom level if not set
@@ -2438,7 +2446,7 @@ class MIDIHumanizer {
     
     canvas.innerHTML = `
       <div class="timeline-container">
-        <h4>MIDIタイムライン表示</h4>
+        <h4>MIDIタイムライン表示（オリジナル vs ヒューマナイズ後）</h4>
         <div class="timeline-controls">
           <button class="zoom-control" onclick="midiHumanizer.adjustZoom(-0.5)">ズームアウト</button>
           <span class="zoom-level">縮尺: ${this.zoomLevel.toFixed(1)}x</span>
@@ -2446,10 +2454,10 @@ class MIDIHumanizer {
           <button class="zoom-control" onclick="midiHumanizer.resetZoom()">リセット</button>
         </div>
         <div class="timeline-track">
-          ${this.renderNoteTimeline(originalNotes, phrases)}
+          ${this.renderOverlaidTimeline(originalNotes, humanizedNotes, phrases)}
         </div>
         <div class="timeline-ruler">
-          ${this.renderTimeRuler(originalNotes)}
+          ${this.renderTimeRuler(originalNotes.concat(humanizedNotes))}
         </div>
       </div>
     `;
@@ -2495,30 +2503,35 @@ class MIDIHumanizer {
     const notes = [];
     if (!midiData || !midiData.tracks || midiData.tracks.length === 0) return notes;
     
-    const track = midiData.tracks[0]; // Use first track
-    const activeNotes = {};
-    
-    track.forEach(event => {
-      if (this.isNoteOn(event)) {
-        activeNotes[event.data1] = {
-          pitch: event.data1,
-          velocity: event.data2,
-          startTime: event.time,
-          endTime: null
-        };
-      } else if (this.isNoteOff(event)) {
-        if (activeNotes[event.data1]) {
-          activeNotes[event.data1].endTime = event.time;
-          notes.push({...activeNotes[event.data1]});
-          delete activeNotes[event.data1];
+    // Extract notes from all tracks and combine them
+    midiData.tracks.forEach((track, trackIndex) => {
+      const activeNotes = {};
+      
+      track.forEach(event => {
+        if (this.isNoteOn(event)) {
+          const noteKey = `${event.data1}_${trackIndex}`;
+          activeNotes[noteKey] = {
+            pitch: event.data1,
+            velocity: event.data2,
+            startTime: event.time,
+            endTime: null,
+            track: trackIndex
+          };
+        } else if (this.isNoteOff(event)) {
+          const noteKey = `${event.data1}_${trackIndex}`;
+          if (activeNotes[noteKey]) {
+            activeNotes[noteKey].endTime = event.time;
+            notes.push({...activeNotes[noteKey]});
+            delete activeNotes[noteKey];
+          }
         }
-      }
-    });
-    
-    // Handle any remaining active notes
-    Object.values(activeNotes).forEach(note => {
-      note.endTime = note.startTime + 480; // Default duration
-      notes.push(note);
+      });
+      
+      // Handle any remaining active notes for this track
+      Object.values(activeNotes).forEach(note => {
+        note.endTime = note.startTime + 480; // Default duration
+        notes.push(note);
+      });
     });
     
     return notes.sort((a, b) => a.startTime - b.startTime);
@@ -2549,6 +2562,79 @@ class MIDIHumanizer {
         <div class="timeline-note" 
              style="left: ${left}%; width: ${width}%; top: ${top}%; opacity: ${0.3 + intensity * 0.7}"
              title="音程: ${note.pitch}, 音量: ${note.velocity}, 開始: ${note.startTime}">
+        </div>
+      `;
+    });
+    
+    // Render phrase boundaries
+    phrases.forEach((phrase, index) => {
+      const startPos = (phrase.start / maxTime) * 100;
+      const endPos = (phrase.end / maxTime) * 100;
+      
+      html += `
+        <div class="phrase-boundary start" 
+             style="left: ${startPos}%"
+             title="フレーズ ${index + 1} 開始">
+        </div>
+        <div class="phrase-boundary end" 
+             style="left: ${endPos}%"
+             title="フレーズ ${index + 1} 終了">
+        </div>
+        <div class="phrase-span" 
+             style="left: ${startPos}%; width: ${endPos - startPos}%"
+             title="フレーズ ${index + 1}">
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+    return html;
+  }
+
+  renderOverlaidTimeline(originalNotes, humanizedNotes, phrases) {
+    if (originalNotes.length === 0 && humanizedNotes.length === 0) {
+      return '<p>ノートが見つかりません</p>';
+    }
+    
+    // Combine all notes to determine range
+    const allNotes = [...originalNotes, ...humanizedNotes];
+    const maxTime = Math.max(...allNotes.map(n => n.endTime));
+    const minPitch = Math.min(...allNotes.map(n => n.pitch));
+    const maxPitch = Math.max(...allNotes.map(n => n.pitch));
+    const pitchRange = maxPitch - minPitch;
+    
+    // Apply zoom level
+    const zoomLevel = this.zoomLevel || 1;
+    const timelineWidth = 100 * zoomLevel;
+    
+    let html = `<div class="timeline-notes overlaid" style="width: ${timelineWidth}%;">`;
+    
+    // Render original notes (with original styling)
+    originalNotes.forEach((note, index) => {
+      const left = (note.startTime / maxTime) * 100;
+      const width = Math.max(0.5, ((note.endTime - note.startTime) / maxTime) * 100);
+      const top = ((maxPitch - note.pitch) / Math.max(1, pitchRange)) * 80 + 10;
+      const intensity = note.velocity / 127;
+      
+      html += `
+        <div class="timeline-note original" 
+             style="left: ${left}%; width: ${width}%; top: ${top}%; opacity: ${0.4 + intensity * 0.4}"
+             title="オリジナル - 音程: ${note.pitch}, 音量: ${note.velocity}, 開始: ${note.startTime}">
+        </div>
+      `;
+    });
+    
+    // Render humanized notes (with humanized styling)
+    humanizedNotes.forEach((note, index) => {
+      const left = (note.startTime / maxTime) * 100;
+      const width = Math.max(0.5, ((note.endTime - note.startTime) / maxTime) * 100);
+      const top = ((maxPitch - note.pitch) / Math.max(1, pitchRange)) * 80 + 10;
+      const intensity = note.velocity / 127;
+      
+      html += `
+        <div class="timeline-note humanized" 
+             style="left: ${left}%; width: ${width}%; top: ${top}%; opacity: ${0.4 + intensity * 0.4}"
+             title="ヒューマナイズ後 - 音程: ${note.pitch}, 音量: ${note.velocity}, 開始: ${note.startTime}">
         </div>
       `;
     });
