@@ -869,34 +869,244 @@ class MIDIHumanizer {
   }
 
   identifyPhraseBoundaries(track) {
-    const phrases = [];
-    let currentPhrase = { start: 0, end: 0, notes: [] };
+    const noteEvents = track.filter(event => this.isNoteOn(event));
+    if (noteEvents.length < 2) return [{ start: 0, end: noteEvents[0]?.time || 0, notes: noteEvents }];
     
-    // Detect phrase boundaries based on rests and melodic patterns
-    let lastTime = 0;
+    // Extract notes with durations
+    const notes = this.extractNotesFromTrack(track);
+    if (notes.length < 2) return [{ start: 0, end: notes[0]?.endTime || 0, notes: noteEvents }];
     
-    track.forEach((event, index) => {
+    // Get chord analysis for cadence scoring
+    const chords = this.analyzeChordProgression(track);
+    
+    // Generate boundary candidates (between each pair of notes)
+    const candidates = [];
+    for (let i = 0; i < notes.length - 1; i++) {
+      candidates.push({
+        index: i,
+        time: notes[i].endTime,
+        nextTime: notes[i + 1].startTime
+      });
+    }
+    
+    // Score each candidate using multiple criteria
+    const scoredCandidates = candidates.map(candidate => {
+      const score = this.calculatePhraseBoundaryScore(candidate, notes, chords);
+      return { ...candidate, score };
+    });
+    
+    // Set configurable weights (adjustable parameters as suggested)
+    const weights = {
+      gap: 2.0,        // w1: ギャップ・スコア
+      duration: 1.0,   // w2: 先行音符の長さスコア  
+      contour: 0.5,    // w3: メロディ輪郭スコア
+      cadence: 3.0     // w4: カデンツ・スコア (most important)
+    };
+    
+    // Calculate weighted total scores
+    scoredCandidates.forEach(candidate => {
+      candidate.totalScore = 
+        (weights.gap * candidate.score.gap) +
+        (weights.duration * candidate.score.duration) +
+        (weights.contour * candidate.score.contour) +
+        (weights.cadence * candidate.score.cadence);
+    });
+    
+    // Set threshold for boundary detection (adjustable parameter)
+    const threshold = 0.3; // Lowered from 0.6 to detect more boundaries
+    
+    // Debug: Log scoring information for development
+    if (scoredCandidates.length > 0) {
+      console.log('Phrase boundary analysis:', {
+        candidates: scoredCandidates.length,
+        maxScore: Math.max(...scoredCandidates.map(c => c.totalScore)),
+        avgScore: scoredCandidates.reduce((sum, c) => sum + c.totalScore, 0) / scoredCandidates.length,
+        threshold,
+        detectedBoundaries: scoredCandidates.filter(c => c.totalScore > threshold).length
+      });
+    }
+    
+    // Select boundaries above threshold
+    const boundaries = scoredCandidates
+      .filter(candidate => candidate.totalScore > threshold)
+      .map(candidate => candidate.time);
+    
+    // Create phrases from boundaries
+    return this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
+  }
+  
+  extractNotesFromTrack(track) {
+    const notes = [];
+    const activeNotes = {};
+    
+    track.forEach(event => {
       if (this.isNoteOn(event)) {
-        const gap = event.time - lastTime;
-        
-        // Large gap indicates phrase boundary
-        if (gap > 192 && currentPhrase.notes.length > 0) { // Half note gap
-          currentPhrase.end = lastTime;
-          phrases.push({ ...currentPhrase });
-          currentPhrase = { start: event.time, end: event.time, notes: [] };
+        activeNotes[event.data1] = {
+          pitch: event.data1,
+          velocity: event.data2,
+          startTime: event.time,
+          endTime: null
+        };
+      } else if (this.isNoteOff(event)) {
+        if (activeNotes[event.data1]) {
+          activeNotes[event.data1].endTime = event.time;
+          notes.push({...activeNotes[event.data1]});
+          delete activeNotes[event.data1];
         }
-        
-        currentPhrase.notes.push(event);
-        lastTime = event.time;
       }
     });
     
-    if (currentPhrase.notes.length > 0) {
-      currentPhrase.end = lastTime;
-      phrases.push(currentPhrase);
+    // Handle any remaining active notes
+    Object.values(activeNotes).forEach(note => {
+      note.endTime = note.startTime + 480; // Default duration
+      notes.push(note);
+    });
+    
+    return notes.sort((a, b) => a.startTime - b.startTime);
+  }
+  
+  calculatePhraseBoundaryScore(candidate, notes, chords) {
+    const { index, time, nextTime } = candidate;
+    const currentNote = notes[index];
+    const nextNote = notes[index + 1];
+    
+    // 1. ギャップ・スコア (Gap Score)
+    const gap = nextTime - time;
+    const gapScore = Math.min(1.0, gap / 384); // Normalize to quarter note gaps
+    
+    // 2. 先行音符の長さスコア (Duration Score)  
+    const currentDuration = currentNote.endTime - currentNote.startTime;
+    const avgDuration = this.calculateAverageDurationAround(notes, index, 5);
+    const durationRatio = currentDuration / Math.max(avgDuration, 96);
+    const durationScore = Math.min(1.0, Math.max(0, (durationRatio - 1.0) * 0.5));
+    
+    // 3. メロディ輪郭スコア (Contour Score)
+    const contourScore = this.calculateContourScore(notes, index);
+    
+    // 4. カデンツ・スコア (Cadence Score) - most important
+    const cadenceScore = this.calculateCadenceScore(chords, time);
+    
+    return {
+      gap: gapScore,
+      duration: durationScore,
+      contour: contourScore,
+      cadence: cadenceScore
+    };
+  }
+  
+  calculateAverageDurationAround(notes, centerIndex, radius) {
+    const start = Math.max(0, centerIndex - radius);
+    const end = Math.min(notes.length, centerIndex + radius + 1);
+    
+    let totalDuration = 0;
+    let count = 0;
+    
+    for (let i = start; i < end; i++) {
+      totalDuration += notes[i].endTime - notes[i].startTime;
+      count++;
     }
     
-    return phrases;
+    return count > 0 ? totalDuration / count : 96;
+  }
+  
+  calculateContourScore(notes, index) {
+    if (index < 1 || index >= notes.length - 1) return 0;
+    
+    const prevPitch = notes[index - 1].pitch;
+    const currPitch = notes[index].pitch;
+    const nextPitch = notes[index + 1].pitch;
+    
+    // Check if this is a melodic peak (mountain top) or valley
+    const isPeak = currPitch > prevPitch && currPitch > nextPitch;
+    const isValley = currPitch < prevPitch && currPitch < nextPitch;
+    
+    if (isPeak || isValley) {
+      const intensity = Math.abs(currPitch - prevPitch) + Math.abs(currPitch - nextPitch);
+      return Math.min(1.0, intensity / 24); // Normalize to 2 octaves max
+    }
+    
+    return 0;
+  }
+  
+  calculateCadenceScore(chords, time) {
+    if (chords.length < 2) return 0;
+    
+    const timeInBeats = time / 96;
+    
+    // Find chords before and after this time point
+    let beforeChord = null;
+    let afterChord = null;
+    
+    for (let i = 0; i < chords.length - 1; i++) {
+      if (chords[i].time <= timeInBeats && chords[i + 1].time > timeInBeats) {
+        beforeChord = chords[i];
+        afterChord = chords[i + 1];
+        break;
+      }
+    }
+    
+    if (!beforeChord || !afterChord) return 0;
+    
+    // Calculate tension decrease (high → low tension indicates strong cadence)
+    const tensionDecrease = beforeChord.tension - afterChord.tension;
+    
+    if (tensionDecrease > 0.3) { // Significant tension decrease
+      // Additional bonus for strong cadential progressions
+      let cadenceBonus = 0;
+      if (beforeChord.quality === 'dominant' && 
+          (afterChord.quality === 'major' || afterChord.quality === 'minor')) {
+        cadenceBonus = 0.5; // V-I or V-i cadence
+      }
+      
+      return Math.min(1.0, tensionDecrease + cadenceBonus);
+    }
+    
+    return 0;
+  }
+  
+  createPhrasesFromBoundaries(boundaries, notes, noteEvents) {
+    if (boundaries.length === 0) {
+      // No boundaries found, return single phrase
+      return [{
+        start: 0,
+        end: Math.max(...notes.map(n => n.endTime)),
+        notes: noteEvents
+      }];
+    }
+    
+    const phrases = [];
+    let currentStart = 0;
+    
+    // Sort boundaries
+    boundaries.sort((a, b) => a - b);
+    
+    boundaries.forEach(boundary => {
+      const phraseNotes = noteEvents.filter(event => 
+        event.time >= currentStart && event.time < boundary
+      );
+      
+      if (phraseNotes.length > 0) {
+        phrases.push({
+          start: currentStart,
+          end: boundary,
+          notes: phraseNotes
+        });
+      }
+      
+      currentStart = boundary;
+    });
+    
+    // Add final phrase
+    const finalNotes = noteEvents.filter(event => event.time >= currentStart);
+    if (finalNotes.length > 0) {
+      phrases.push({
+        start: currentStart,
+        end: Math.max(...notes.map(n => n.endTime)),
+        notes: finalNotes
+      });
+    }
+    
+    return phrases.filter(phrase => phrase.notes.length > 0);
   }
 
   analyzeDynamicStructure(track) {
