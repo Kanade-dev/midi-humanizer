@@ -170,9 +170,10 @@ class MIDIHumanizer {
       const indicator = document.createElement('div');
       indicator.className = 'playback-progress-indicator';
       
-      // Calculate position accounting for zoom level
+      // Calculate position accounting for zoom level - when zoomed in, the progress should be relative to the visible area
       const zoomLevel = this.zoomLevel || 1;
-      const adjustedProgress = progress * zoomLevel;
+      // The progress bar should stay within the visible area when zoomed
+      const adjustedProgress = progress / zoomLevel;
       
       indicator.style.cssText = `
         position: absolute;
@@ -1169,7 +1170,7 @@ class MIDIHumanizer {
     if (weightedScores.length < 3) return [];
     
     const peaks = [];
-    const minPhraseLength = grid.ticksPerMeasure * 1.0; // Minimum 1 measure between phrases
+    const minPhraseLength = grid.ticksPerMeasure * 0.5; // Minimum 0.5 measure between phrases for more sensitivity
     
     // Find local maxima in weighted scores
     for (let i = 1; i < weightedScores.length - 1; i++) {
@@ -1180,7 +1181,7 @@ class MIDIHumanizer {
       // Check if this is a local maximum with significant score
       if (current.weightedScore > prev.weightedScore && 
           current.weightedScore > next.weightedScore &&
-          current.weightedScore > 0.15) { // Lowered threshold for better phrase detection
+          current.weightedScore > 0.08) { // Lowered threshold for more sensitive phrase detection
         
         // Ensure minimum distance from previous peak
         if (peaks.length === 0 || current.time - peaks[peaks.length - 1] >= minPhraseLength) {
@@ -1189,8 +1190,8 @@ class MIDIHumanizer {
       }
     }
     
-    // Limit to maximum 4 boundaries (5 phrases) for clarity
-    return peaks.slice(0, 4);
+    // Limit to maximum 8 boundaries (9 phrases) for more detailed phrase detection
+    return peaks.slice(0, 8);
   }
   
   extractNotesFromTrack(track) {
@@ -1924,7 +1925,6 @@ class MIDIHumanizer {
           <div class="visualization-controls">
             <button onclick="midiHumanizer.showVisualization('timeline')" class="viz-button active">タイムライン表示</button>
             <button onclick="midiHumanizer.showVisualization('phrases')" class="viz-button">フレーズ構造</button>
-            <button onclick="midiHumanizer.showVisualization('comparison')" class="viz-button">ビフォー・アフター比較</button>
           </div>
         </div>
         
@@ -2442,10 +2442,6 @@ class MIDIHumanizer {
           <div class="legend-item">
             <div class="legend-color humanized"></div>
             <span>ヒューマナイズ後</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color phrase-boundary"></div>
-            <span>フレーズ境界</span>
           </div>
         </div>
       </div>
