@@ -210,7 +210,7 @@ class MIDIHumanizer {
     const file = e.target.files[0];
     if (file) {
       // Reset previous results
-      this.hideElements(['result', 'error']);
+      this.hideElements(['result', 'error', 'analysis']);
     }
   }
 
@@ -218,7 +218,7 @@ class MIDIHumanizer {
     try {
       this.isProcessing = true;
       this.showProcessing();
-      this.hideElements(['result', 'error']);
+      this.hideElements(['result', 'error', 'analysis']);
 
       // Read MIDI file
       const arrayBuffer = await this.readFileAsArrayBuffer(file);
@@ -357,6 +357,9 @@ class MIDIHumanizer {
     // Set random seed for reproducibility
     this.rng = this.seedRandom(seed);
     
+    // Store style for later use in results display
+    this.lastStyle = style;
+    
     // Perform musical analysis for intelligent humanization
     const musicalAnalysis = this.analyzeMusicStructure(midiData.tracks, style);
     
@@ -367,8 +370,8 @@ class MIDIHumanizer {
       this.humanizeTrack(track, style, intensity, musicalAnalysis.tracks[trackIndex])
     );
     
-    // Display analysis results
-    this.displayAnalysisResults(musicalAnalysis, style);
+    // Don't display analysis results here anymore - they'll be shown in the integrated section
+    // this.displayAnalysisResults(musicalAnalysis, style);
     
     return {
       ...midiData,
@@ -1292,31 +1295,50 @@ class MIDIHumanizer {
     downloadLink.href = url;
     downloadLink.download = 'humanized.mid';
     
-    // Add playback section
-    this.addPlaybackSection(resultDiv);
+    // Add integrated playback and analysis section
+    this.addIntegratedSection(resultDiv);
     
     resultDiv.classList.remove('hidden');
   }
 
-  addPlaybackSection(container) {
+  addIntegratedSection(container) {
     // Remove existing playback section
     const existingSection = container.querySelector('.playback-section');
     if (existingSection) {
       existingSection.remove();
     }
     
-    const playbackSection = document.createElement('div');
-    playbackSection.className = 'playback-section';
-    playbackSection.innerHTML = `
-      <h3>再生比較</h3>
-      <div class="playback-controls">
-        <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
-        <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
+    // Create integrated section with both playback and analysis
+    const integratedSection = document.createElement('div');
+    integratedSection.className = 'integrated-section';
+    
+    // Add playback controls
+    const playbackHtml = `
+      <div class="playback-subsection">
+        <h3>再生比較</h3>
+        <div class="playback-controls">
+          <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
+          <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
+        </div>
+        <p><small>※ 再生機能は基本的な実装です。より詳細な比較には専用のMIDIプレイヤーをご使用ください。</small></p>
       </div>
-      <p><small>※ 再生機能は基本的な実装です。より詳細な比較には専用のMIDIプレイヤーをご使用ください。</small></p>
     `;
     
-    container.insertBefore(playbackSection, container.firstChild);
+    // Add analysis results if available
+    let analysisHtml = '';
+    if (this.lastAnalysis) {
+      analysisHtml = `
+        <div class="analysis-subsection">
+          <h3>音楽分析結果 (Musical Analysis Results)</h3>
+          <div class="analysis-content">
+            ${this.createAnalysisSummary(this.lastAnalysis, this.lastStyle || 'classical')}
+          </div>
+        </div>
+      `;
+    }
+    
+    integratedSection.innerHTML = playbackHtml + analysisHtml;
+    container.insertBefore(integratedSection, container.firstChild);
   }
 
   displayAnalysisResults(analysis, style) {
