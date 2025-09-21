@@ -395,7 +395,7 @@ class MIDIHumanizer {
       const intensity = parseFloat(document.getElementById('intensity').value);
       const seed = document.getElementById('seed').value || Date.now();
 
-      this.humanizedMidiData = this.humanizeMIDI(midiData, style, intensity, seed);
+      this.humanizedMidiData = this.humanizeMIDI(midiData, style, intensity, seed, true); // true = isUserUpload
 
       // Show results
       this.showResults();
@@ -518,7 +518,7 @@ class MIDIHumanizer {
     return events;
   }
 
-  humanizeMIDI(midiData, style, intensity, seed) {
+  humanizeMIDI(midiData, style, intensity, seed, isUserUpload = false) {
     // Set random seed for reproducibility
     this.rng = this.seedRandom(seed);
     
@@ -526,7 +526,7 @@ class MIDIHumanizer {
     this.lastStyle = style;
     
     // Perform musical analysis for intelligent humanization
-    const musicalAnalysis = this.analyzeMusicStructure(midiData.tracks, style);
+    const musicalAnalysis = this.analyzeMusicStructure(midiData.tracks, style, isUserUpload);
     
     // Store analysis for visualization
     this.lastAnalysis = musicalAnalysis;
@@ -804,7 +804,7 @@ class MIDIHumanizer {
   }
 
   // Musical Analysis Functions for Intelligent Humanization
-  analyzeMusicStructure(tracks, style) {
+  analyzeMusicStructure(tracks, style, isUserUpload = false) {
     const analysis = {
       tracks: [],
       globalTempo: 120,
@@ -816,7 +816,7 @@ class MIDIHumanizer {
         chords: this.analyzeChordProgression(track),
         melody: this.analyzeMelody(track),
         rhythm: this.analyzeRhythmicContext(track, style),
-        phrasing: this.identifyPhraseBoundaries(track),
+        phrasing: this.identifyPhraseBoundaries(track, isUserUpload),
         dynamics: this.analyzeDynamicStructure(track)
       };
       analysis.tracks.push(trackAnalysis);
@@ -1033,7 +1033,7 @@ class MIDIHumanizer {
     return patterns[style] || patterns.pop;
   }
 
-  identifyPhraseBoundaries(track) {
+  identifyPhraseBoundaries(track, isUserUpload = false) {
     const noteEvents = track.filter(event => this.isNoteOn(event));
     if (noteEvents.length < 6) return [{ start: 0, end: noteEvents[noteEvents.length - 1]?.time || 0, notes: noteEvents }];
     
@@ -1041,17 +1041,22 @@ class MIDIHumanizer {
     const notes = this.extractNotesFromTrack(track);
     if (notes.length < 6) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
     
-    // Check if this is a training file with phrase markers (C6/B5)
-    const trainingAnalysis = this.analyzeTrainingPhrases(track, notes);
-    
-    if (trainingAnalysis && trainingAnalysis.markerCount > 0) {
-      console.log('🎵 Using training data for phrase detection - Enhanced analysis mode activated');
-      console.log('Training markers found:', {
-        phraseBoundaries: trainingAnalysis.markerCount,
-        strongNuanceMarkers: trainingAnalysis.strongNuanceFeatures?.length || 0,
-        regularNuanceMarkers: trainingAnalysis.nuanceFeatures?.length || 0
-      });
-      return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
+    // Skip marker detection for user-uploaded files (they won't have training markers)
+    if (!isUserUpload) {
+      // Check if this is a training file with phrase markers (C6/B5)
+      const trainingAnalysis = this.analyzeTrainingPhrases(track, notes);
+      
+      if (trainingAnalysis && trainingAnalysis.markerCount > 0) {
+        console.log('🎵 Using training data for phrase detection - Enhanced analysis mode activated');
+        console.log('Training markers found:', {
+          phraseBoundaries: trainingAnalysis.markerCount,
+          strongNuanceMarkers: trainingAnalysis.strongNuanceFeatures?.length || 0,
+          regularNuanceMarkers: trainingAnalysis.nuanceFeatures?.length || 0
+        });
+        return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
+      }
+    } else {
+      console.log('🎯 User-uploaded file: Skipping marker detection');
     }
     
     // **NEW**: If we have learned patterns from previous training data, prefer using them over grid-based detection
