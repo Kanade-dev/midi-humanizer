@@ -3417,6 +3417,7 @@ class MIDIHumanizer {
           <div class="visualization-controls">
             <button onclick="midiHumanizer.showVisualization('timeline', this)" class="viz-button active">タイムライン表示</button>
             <button onclick="midiHumanizer.showVisualization('phrases', this)" class="viz-button">フレーズ構造</button>
+            <button onclick="midiHumanizer.showVisualization('comparison', this)" class="viz-button">ビフォー・アフター比較</button>
           </div>
         </div>
       </div>
@@ -3945,7 +3946,8 @@ class MIDIHumanizer {
       const buttons = document.querySelectorAll('.viz-button');
       buttons.forEach(btn => {
         if ((mode === 'timeline' && btn.textContent.includes('タイムライン')) ||
-            (mode === 'phrases' && btn.textContent.includes('フレーズ'))) {
+            (mode === 'phrases' && btn.textContent.includes('フレーズ')) ||
+            (mode === 'comparison' && btn.textContent.includes('ビフォー・アフター'))) {
           buttonToActivate = btn;
         }
       });
@@ -3962,6 +3964,9 @@ class MIDIHumanizer {
         break;
       case 'phrases':
         this.renderLightweightPhrases();
+        break;
+      case 'comparison':
+        this.renderLightweightComparison();
         break;
     }
   }
@@ -4165,6 +4170,188 @@ class MIDIHumanizer {
         </div>
       </div>
     `;
+  }
+
+  renderLightweightComparison() {
+    const canvas = document.getElementById('visualizationCanvas');
+    if (!canvas) return;
+    
+    const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
+    const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
+    
+    // Calculate statistics for original MIDI
+    const originalStats = this.calculateMIDIStatistics(originalNotes);
+    const humanizedStats = this.calculateMIDIStatistics(humanizedNotes);
+    
+    canvas.innerHTML = `
+      <div class="comparison-analysis">
+        <h4>ビフォー・アフター統計比較</h4>
+        <div class="comparison-overview">
+          <p style="margin-bottom: 1.5rem; color: var(--text-secondary); font-size: 0.95rem;">
+            ヒューマナイズ処理による変化を統計的に比較します
+          </p>
+        </div>
+        <div class="stats-comparison" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 2rem;">
+          <div class="stat-header" style="font-weight: 600; color: var(--text); padding: 0.75rem; background: var(--surface-tertiary); border-radius: var(--radius); text-align: center;">
+            項目
+          </div>
+          <div class="stat-header" style="font-weight: 600; color: var(--text); padding: 0.75rem; background: var(--surface-tertiary); border-radius: var(--radius); text-align: center;">
+            オリジナル
+          </div>
+          <div class="stat-header" style="font-weight: 600; color: var(--text); padding: 0.75rem; background: var(--surface-tertiary); border-radius: var(--radius); text-align: center;">
+            ヒューマナイズ後
+          </div>
+          
+          <div class="stat-label" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); font-weight: 500;">
+            ノート数
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace;">
+            ${originalStats.noteCount}
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace;">
+            ${humanizedStats.noteCount}
+          </div>
+          
+          <div class="stat-label" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); font-weight: 500;">
+            平均音量
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace;">
+            ${originalStats.avgVelocity.toFixed(1)}
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace; ${this.getChangeColor(humanizedStats.avgVelocity, originalStats.avgVelocity)}">
+            ${humanizedStats.avgVelocity.toFixed(1)} ${this.getChangeIndicator(humanizedStats.avgVelocity, originalStats.avgVelocity)}
+          </div>
+          
+          <div class="stat-label" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); font-weight: 500;">
+            平均音長 (ms)
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace;">
+            ${originalStats.avgDuration.toFixed(0)}
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace; ${this.getChangeColor(humanizedStats.avgDuration, originalStats.avgDuration)}">
+            ${humanizedStats.avgDuration.toFixed(0)} ${this.getChangeIndicator(humanizedStats.avgDuration, originalStats.avgDuration)}
+          </div>
+          
+          <div class="stat-label" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); font-weight: 500;">
+            音域 (semitones)
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace;">
+            ${originalStats.pitchRange}
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace;">
+            ${humanizedStats.pitchRange}
+          </div>
+          
+          <div class="stat-label" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); font-weight: 500;">
+            タイミング分散
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace;">
+            ${originalStats.timingVariance.toFixed(2)}
+          </div>
+          <div class="stat-value" style="padding: 0.75rem; background: var(--surface); border-radius: var(--radius); text-align: center; font-family: monospace; ${this.getChangeColor(humanizedStats.timingVariance, originalStats.timingVariance)}">
+            ${humanizedStats.timingVariance.toFixed(2)} ${this.getChangeIndicator(humanizedStats.timingVariance, originalStats.timingVariance)}
+          </div>
+        </div>
+        
+        <div class="change-summary" style="background: var(--surface-secondary); padding: 1.5rem; border-radius: var(--radius); border-left: 4px solid var(--accent);">
+          <h5 style="margin-bottom: 1rem; color: var(--text);">ヒューマナイズの効果</h5>
+          <div style="display: grid; gap: 0.5rem;">
+            ${this.generateChangeSummary(originalStats, humanizedStats)}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  calculateMIDIStatistics(notes) {
+    if (!notes || notes.length === 0) {
+      return {
+        noteCount: 0,
+        avgVelocity: 0,
+        avgDuration: 0,
+        pitchRange: 0,
+        timingVariance: 0
+      };
+    }
+    
+    const velocities = notes.map(n => n.velocity || 64);
+    const durations = notes.map(n => (n.endTime || n.startTime + 100) - n.startTime);
+    const pitches = notes.map(n => n.pitch || 60);
+    const timings = notes.map(n => n.startTime);
+    
+    // Calculate averages
+    const avgVelocity = velocities.reduce((sum, v) => sum + v, 0) / velocities.length;
+    const avgDuration = durations.reduce((sum, d) => sum + d, 0) / durations.length;
+    
+    // Calculate pitch range
+    const minPitch = Math.min(...pitches);
+    const maxPitch = Math.max(...pitches);
+    const pitchRange = maxPitch - minPitch;
+    
+    // Calculate timing variance (measure of humanization)
+    const avgTiming = timings.reduce((sum, t) => sum + t, 0) / timings.length;
+    const timingVariance = timings.reduce((sum, t) => sum + Math.pow(t - avgTiming, 2), 0) / timings.length;
+    
+    return {
+      noteCount: notes.length,
+      avgVelocity,
+      avgDuration,
+      pitchRange,
+      timingVariance: Math.sqrt(timingVariance)
+    };
+  }
+
+  getChangeColor(newValue, oldValue) {
+    const change = Math.abs(newValue - oldValue);
+    const percentChange = oldValue > 0 ? (change / oldValue) * 100 : 0;
+    
+    if (percentChange > 5) {
+      return 'color: var(--accent);'; // Significant change
+    } else if (percentChange > 1) {
+      return 'color: var(--primary);'; // Moderate change
+    }
+    return 'color: var(--text-secondary);'; // Minor change
+  }
+
+  getChangeIndicator(newValue, oldValue) {
+    const change = newValue - oldValue;
+    const percentChange = oldValue > 0 ? Math.abs(change / oldValue) * 100 : 0;
+    
+    if (percentChange < 1) return '';
+    
+    if (change > 0) {
+      return `(+${percentChange.toFixed(1)}%)`;
+    } else {
+      return `(-${percentChange.toFixed(1)}%)`;
+    }
+  }
+
+  generateChangeSummary(originalStats, humanizedStats) {
+    const changes = [];
+    
+    // Velocity changes
+    const velocityChange = humanizedStats.avgVelocity - originalStats.avgVelocity;
+    if (Math.abs(velocityChange) > 1) {
+      changes.push(`<span>• 音量: ${velocityChange > 0 ? '増加' : '減少'} (${Math.abs(velocityChange).toFixed(1)})</span>`);
+    }
+    
+    // Duration changes  
+    const durationChange = humanizedStats.avgDuration - originalStats.avgDuration;
+    if (Math.abs(durationChange) > 10) {
+      changes.push(`<span>• 音長: ${durationChange > 0 ? '延長' : '短縮'} (${Math.abs(durationChange).toFixed(0)}ms)</span>`);
+    }
+    
+    // Timing variance changes
+    const timingChange = humanizedStats.timingVariance - originalStats.timingVariance;
+    if (Math.abs(timingChange) > 0.1) {
+      changes.push(`<span>• タイミング: ${timingChange > 0 ? 'より人間的' : 'より機械的'} (分散${timingChange > 0 ? '増加' : '減少'})</span>`);
+    }
+    
+    if (changes.length === 0) {
+      changes.push('<span>• 微細な調整が適用されました</span>');
+    }
+    
+    return changes.join('');
   }
 
   // Legacy heavy visualization functions removed for performance
@@ -4383,9 +4570,10 @@ class MIDIHumanizer {
     // Re-render the current visualization mode
     if (this.currentVisualizationMode === 'phrases') {
       this.renderPhraseVisualization();
-    } else {
+    } else if (this.currentVisualizationMode === 'timeline') {
       this.renderTimelineVisualization();
     }
+    // Note: comparison mode doesn't use zoom functionality
   }
 
   resetZoom() {
@@ -4393,9 +4581,10 @@ class MIDIHumanizer {
     // Re-render the current visualization mode
     if (this.currentVisualizationMode === 'phrases') {
       this.renderPhraseVisualization();
-    } else {
+    } else if (this.currentVisualizationMode === 'timeline') {
       this.renderTimelineVisualization();
     }
+    // Note: comparison mode doesn't use zoom functionality
   }
 
   renderTimeRuler(notes) {
