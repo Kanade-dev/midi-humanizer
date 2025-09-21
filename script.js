@@ -1982,45 +1982,42 @@ class MIDIHumanizer {
 
   addIntegratedSection(container) {
     // Remove existing sections
-    const existingSection = container.querySelector('.integrated-section');
+    const existingSection = container.querySelector('.result');
     if (existingSection) {
       existingSection.remove();
     }
     
     // Create simplified integrated section
     const integratedSection = document.createElement('div');
-    integratedSection.className = 'integrated-section';
+    integratedSection.className = 'result';
     
-    // Simplified interface with essential features only
+    // Lightweight interface focused on essential features
     const simplifiedHtml = `
-      <div class="results-summary">
+      <div class="success-header">
         <h3>ヒューマナイズ完了</h3>
         <p>処理が完了しました。以下で結果をプレビューしてダウンロードできます。</p>
       </div>
       
-      <div class="playback-section">
+      <div class="playback-section section">
         <h4>再生とプレビュー</h4>
         <div class="playback-controls">
           <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
           <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
         </div>
         
-        <!-- Enhanced MIDI Visualizer with playback progress -->
         <div class="midi-visualizer-container">
           <h5>MIDIビジュアライザー</h5>
           <div id="midiVisualization" class="midi-visualization">
-            <!-- Visualization will be populated here -->
+            <div id="visualizationCanvas"></div>
           </div>
           <div class="visualization-controls">
-            <button onclick="midiHumanizer.showVisualization('timeline')" class="viz-button active">タイムライン表示</button>
-            <button onclick="midiHumanizer.showVisualization('phrases')" class="viz-button">フレーズ構造</button>
+            <button onclick="midiHumanizer.showVisualization('timeline', this)" class="viz-button active">タイムライン表示</button>
+            <button onclick="midiHumanizer.showVisualization('phrases', this)" class="viz-button">フレーズ構造</button>
           </div>
         </div>
-        
-        <small>※ 基本的な再生機能です。赤い線が現在の再生位置を示します。</small>
       </div>
       
-      <div class="phrase-analysis-section">
+      <div class="phrase-analysis-section section">
         <h4>フレーズ分析結果</h4>
         <div id="phraseAnalysisResults">
           <!-- Phrase analysis will be inserted here -->
@@ -2034,6 +2031,9 @@ class MIDIHumanizer {
     
     integratedSection.innerHTML = simplifiedHtml;
     container.appendChild(integratedSection);
+    
+    // Initialize with lightweight visualization
+    this.showVisualization('timeline');
     
     // Add phrase analysis results
     this.displaySimplifiedPhraseAnalysis();
@@ -2540,7 +2540,7 @@ class MIDIHumanizer {
   showVisualization(mode, targetButton = null) {
     this.currentVisualizationMode = mode;
     
-    // Update button states
+    // Update button states (lightweight)
     document.querySelectorAll('.viz-button').forEach(btn => {
       btn.classList.remove('active');
     });
@@ -2561,45 +2561,85 @@ class MIDIHumanizer {
       buttonToActivate.classList.add('active');
     }
     
-    // Render the appropriate visualization
+    // Render lightweight visualizations
     switch(mode) {
       case 'timeline':
-        this.renderTimelineVisualization();
+        this.renderLightweightTimeline();
         break;
       case 'phrases':
-        this.renderPhraseVisualization();
+        this.renderLightweightPhrases();
         break;
     }
   }
 
-  renderTimelineVisualization() {
+  renderLightweightTimeline() {
     const canvas = document.getElementById('visualizationCanvas');
     if (!canvas) return;
     
     const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
     const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
-    const phrases = this.lastAnalysis.tracks[0].phrasing;
-    
-    // Initialize zoom level if not set
-    if (!this.zoomLevel) this.zoomLevel = 5;
     
     canvas.innerHTML = `
-      <div class="timeline-container">
-        <h4>MIDIタイムライン表示（オリジナル vs ヒューマナイズ後）</h4>
-        <div class="timeline-controls">
-          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(-0.5)">ズームアウト</button>
-          <span class="zoom-level">縮尺: ${this.zoomLevel.toFixed(1)}x</span>
-          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(0.5)">ズームイン</button>
-          <button class="zoom-control" onclick="midiHumanizer.resetZoom()">リセット</button>
+      <div class="simple-timeline">
+        <h4>MIDI タイムライン表示</h4>
+        <div class="timeline-info">
+          <div class="timeline-stats">
+            <span>オリジナル: <strong>${originalNotes.length}</strong> ノート</span>
+            <span>ヒューマナイズ後: <strong>${humanizedNotes.length}</strong> ノート</span>
+          </div>
         </div>
-        <div class="timeline-track">
-          ${this.renderOverlaidTimeline(originalNotes, humanizedNotes, phrases)}
-        </div>
-        <div class="timeline-ruler">
-          ${this.renderTimeRuler(originalNotes.concat(humanizedNotes))}
+        <div class="timeline-representation">
+          <div class="timeline-track">
+            <div class="timeline-label">オリジナル</div>
+            <div class="timeline-bar" style="background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%); height: 12px; border-radius: 6px; margin: 0.5rem 0;"></div>
+          </div>
+          <div class="timeline-track">
+            <div class="timeline-label">ヒューマナイズ後</div>
+            <div class="timeline-bar" style="background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%); height: 12px; border-radius: 6px; margin: 0.5rem 0;"></div>
+          </div>
         </div>
       </div>
     `;
+  }
+
+  renderLightweightPhrases() {
+    const canvas = document.getElementById('visualizationCanvas');
+    if (!canvas) return;
+    
+    const phrases = this.lastAnalysis?.tracks[0]?.phrasing || [];
+    
+    canvas.innerHTML = `
+      <div class="simple-phrases">
+        <h4>フレーズ構造表示</h4>
+        <div class="phrase-overview">
+          <p>検出されたフレーズ数: <strong>${phrases.length}</strong></p>
+          <p>平均フレーズ長: <strong>${this.calculateAveragePhraseLength(phrases).toFixed(1)}秒</strong></p>
+        </div>
+        <div class="phrase-blocks" style="display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap;">
+          ${phrases.map((phrase, index) => {
+            const duration = ((phrase.end - phrase.start) / 480).toFixed(1);
+            const noteCount = phrase.notes?.length || 0;
+            return `
+              <div class="phrase-block" style="flex: 1; min-width: 120px; background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%); color: white; padding: 1rem; border-radius: var(--radius); text-align: center;">
+                <div class="phrase-label" style="font-weight: 600; margin-bottom: 0.25rem;">フレーズ ${index + 1}</div>
+                <div class="phrase-duration" style="font-size: 0.9rem;">${duration}秒</div>
+                <div class="phrase-notes" style="font-size: 0.8rem; opacity: 0.8;">${noteCount}音</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // Legacy heavy visualization functions removed for performance
+  // These are replaced by lightweight alternatives above
+  
+  formatDuration(seconds) {
+    if (seconds < 60) return `${seconds.toFixed(1)}秒`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}分${remainingSeconds.toFixed(1)}秒`;
   }
 
   renderPhraseVisualization() {
