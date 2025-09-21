@@ -382,6 +382,9 @@ class MIDIHumanizer {
     let cumulativeDrift = 0; // Track cumulative timing drift
     const beatTicks = 480; // Standard MIDI beat in ticks
     
+    // Pre-process to detect chords for micro-arpeggiation
+    const chordGroups = this.detectChordGroups(track);
+    
     for (let i = 0; i < track.length; i++) {
       const event = { ...track[i] };
       
@@ -390,11 +393,33 @@ class MIDIHumanizer {
         const originalTime = event.time;
         event.time = this.humanizeTimingIntelligent(event.time, event.data1, style, intensity, trackAnalysis, i, cumulativeDrift, beatTicks);
         
+        // Apply micro-arpeggiation for chords (suggestion from @Kanade-dev)
+        const chordGroup = chordGroups.find(group => 
+          group.events.some(e => e.originalIndex === i)
+        );
+        
+        if (chordGroup && chordGroup.events.length > 2) {
+          const eventInChord = chordGroup.events.find(e => e.originalIndex === i);
+          if (eventInChord) {
+            // Sort notes by pitch for arpeggiation (bottom to top)
+            const sortedNotes = [...chordGroup.events].sort((a, b) => a.pitch - b.pitch);
+            const noteIndex = sortedNotes.findIndex(e => e.originalIndex === i);
+            
+            // Apply micro-timing offset (1-3ms per note)
+            const arpeggiationDelay = noteIndex * intensity * 2; // 0-2 ticks per note
+            event.time += arpeggiationDelay;
+          }
+        }
+        
         // Update cumulative drift
         cumulativeDrift += (event.time - originalTime);
         
         // Check for timing conflicts with previous events and resolve
         event.time = this.resolveTimingConflicts(event, humanizedEvents, originalTime);
+        
+        // Apply velocity-timing correlation (suggestion from @Kanade-dev)
+        const velocityTimingAdjustment = this.calculateVelocityTimingCorrelation(event.data2, intensity);
+        event.time += velocityTimingAdjustment;
         
         // Apply intelligent velocity humanization based on musical phrasing
         event.data2 = this.humanizeVelocityIntelligent(event.data2, event.data1, style, intensity, trackAnalysis, i);
@@ -431,6 +456,46 @@ class MIDIHumanizer {
     this.enforceMinimumSpacing(humanizedEvents);
     
     return humanizedEvents;
+  }
+
+  // Detect simultaneous notes for micro-arpeggiation (suggestion from @Kanade-dev)
+  detectChordGroups(track) {
+    const chordGroups = [];
+    const tolerance = 5; // Ticks tolerance for "simultaneous" notes
+    
+    track.forEach((event, index) => {
+      if (this.isNoteOn(event)) {
+        // Find existing chord group or create new one
+        let chordGroup = chordGroups.find(group => 
+          Math.abs(group.time - event.time) <= tolerance
+        );
+        
+        if (!chordGroup) {
+          chordGroup = {
+            time: event.time,
+            events: []
+          };
+          chordGroups.push(chordGroup);
+        }
+        
+        chordGroup.events.push({
+          originalIndex: index,
+          pitch: event.data1,
+          velocity: event.data2,
+          time: event.time
+        });
+      }
+    });
+    
+    return chordGroups;
+  }
+
+  // Calculate velocity-timing correlation (suggestion from @Kanade-dev)
+  calculateVelocityTimingCorrelation(velocity, intensity) {
+    // Strong notes (high velocity) played slightly early, weak notes slightly late
+    const velocityNormalized = (velocity - 64) / 64; // Normalize around middle velocity
+    const timingAdjustment = -velocityNormalized * intensity * 3; // Max 3 ticks adjustment
+    return timingAdjustment;
   }
 
   // Timing conflict resolution methods
@@ -708,25 +773,59 @@ class MIDIHumanizer {
 
   analyzeRhythmicContext(track, style) {
     const beats = {};
-    const beatStrength = [1.0, 0.5, 0.75, 0.5]; // 4/4 beat strengths
+    const beatStrength = [1.0, 0.5, 0.75, 0.5]; // 4/4 beat strengths: Strong-Weak-Medium-Weak
+    const beatAnalysis = {};
     
     track.forEach(event => {
       if (this.isNoteOn(event)) {
-        const beat = Math.floor((event.time / 96) % 4);
-        const subbeat = (event.time / 24) % 4;
+        const measureTime = event.time % (96 * 4); // Time within measure (4 beats)
+        const beatPosition = measureTime / 96; // Float position within measure
+        const beatIndex = Math.floor(beatPosition); // Which beat (0,1,2,3)
+        const subdivision = (beatPosition % 1) * 4; // Subdivision within beat
         
-        if (!beats[beat]) beats[beat] = { count: 0, offbeat: 0 };
-        beats[beat].count++;
+        // Analyze beat strength and timing
+        if (!beatAnalysis[beatIndex]) {
+          beatAnalysis[beatIndex] = { 
+            count: 0, 
+            offbeat: 0, 
+            strength: beatStrength[beatIndex],
+            subdivisions: { onBeat: 0, offBeat: 0 }
+          };
+        }
         
-        // Detect syncopation (notes on weak subdivisions)
-        if (subbeat % 1 !== 0) beats[beat].offbeat++;
+        beatAnalysis[beatIndex].count++;
+        
+        // More precise syncopation detection
+        if (subdivision > 0.1 && subdivision < 0.9) { // Not exactly on beat
+          beatAnalysis[beatIndex].offbeat++;
+          beatAnalysis[beatIndex].subdivisions.offBeat++;
+        } else {
+          beatAnalysis[beatIndex].subdivisions.onBeat++;
+        }
+        
+        // Legacy beats object for compatibility
+        if (!beats[beatIndex]) beats[beatIndex] = { count: 0, offbeat: 0 };
+        beats[beatIndex].count++;
+        if (subdivision > 0.1 && subdivision < 0.9) beats[beatIndex].offbeat++;
       }
     });
 
+    // Calculate weighted syncopation based on beat strength
+    let weightedSyncopation = 0;
+    let totalWeight = 0;
+    Object.entries(beatAnalysis).forEach(([beat, data]) => {
+      const syncopationRatio = data.count > 0 ? data.offbeat / data.count : 0;
+      weightedSyncopation += syncopationRatio * data.strength;
+      totalWeight += data.strength;
+    });
+
     return {
-      beats: beats,
+      beats: beats, // For compatibility
+      beatAnalysis: beatAnalysis,
       syncopation: this.calculateSyncopationLevel(beats),
-      groove: this.identifyGroovePattern(beats, style)
+      weightedSyncopation: totalWeight > 0 ? weightedSyncopation / totalWeight : 0,
+      groove: this.identifyGroovePattern(beats, style),
+      offbeatRatio: this.calculateOffbeatRatio(beatAnalysis)
     };
   }
 
@@ -740,6 +839,19 @@ class MIDIHumanizer {
     });
     
     return total > 0 ? offbeat / total : 0;
+  }
+
+  calculateOffbeatRatio(beatAnalysis) {
+    let totalOnBeat = 0;
+    let totalOffBeat = 0;
+    
+    Object.values(beatAnalysis).forEach(beat => {
+      totalOnBeat += beat.subdivisions.onBeat;
+      totalOffBeat += beat.subdivisions.offBeat;
+    });
+    
+    const total = totalOnBeat + totalOffBeat;
+    return total > 0 ? totalOffBeat / total : 0;
   }
 
   identifyGroovePattern(beats, style) {
@@ -848,6 +960,20 @@ class MIDIHumanizer {
     adjustment = Math.max(-maxAdjustment, Math.min(maxAdjustment, adjustment));
     
     if (!analysis) return Math.max(0, time + adjustment);
+
+    // Beat strength analysis for rhythmic accuracy
+    if (analysis.rhythm && analysis.rhythm.beatAnalysis) {
+      const measureTime = time % (beatTicks * 4);
+      const beatPosition = measureTime / beatTicks;
+      const beatIndex = Math.floor(beatPosition);
+      const beatData = analysis.rhythm.beatAnalysis[beatIndex];
+      
+      if (beatData) {
+        // Strong beats (downbeats) should be more accurate
+        const beatStrengthAdjustment = -adjustment * beatData.strength * 0.3;
+        adjustment += beatStrengthAdjustment;
+      }
+    }
     
     // Apply phrase-aware timing (reduced intensity to prevent drift)
     const phrase = analysis.phrasing.find(p => 
@@ -868,14 +994,15 @@ class MIDIHumanizer {
       }
     }
     
-    // Apply chord-based timing adjustments (reduced intensity)
+    // Enhanced chord-based timing adjustments with dynamic hesitation
     const nearbyChord = analysis.chords.find(c => 
       Math.abs(c.time - time / 96) < 2
     );
     
     if (nearbyChord && nearbyChord.tension > 0.5) {
-      // Slight hesitation before tense harmonies (reduced from intensity * tension * 3 to intensity * tension * 1.5)
-      adjustment += intensity * nearbyChord.tension * 1.5;
+      // Dynamic hesitation based on tension level (suggestion from @Kanade-dev)
+      const hesitationIntensity = nearbyChord.tension * intensity * 2.5;
+      adjustment += hesitationIntensity;
     }
     
     // Style-specific timing adjustments (reduced intensity)
@@ -897,6 +1024,13 @@ class MIDIHumanizer {
     
     if (!analysis) return Math.max(1, Math.min(127, velocity + adjustment));
     
+    // Velocity-timing correlation (suggestion from @Kanade-dev)
+    // Strong notes (high velocity) tend to be played slightly early
+    // Weak notes (low velocity) tend to be played slightly late
+    const velocityNormalized = velocity / 127;
+    const timingInfluence = (velocityNormalized - 0.5) * intensity * 0.1;
+    // This will be used in timing adjustments elsewhere
+    
     // Apply melodic peak emphasis
     const melodyNote = analysis.melody.notes.find(m => 
       Math.abs(m.time - eventIndex * 10) < 50 && m.pitch === note
@@ -910,6 +1044,21 @@ class MIDIHumanizer {
       if (peak) {
         // Emphasize melodic peaks
         adjustment += intensity * peak.intensity * 0.3;
+      }
+    }
+
+    // Beat strength emphasis (suggestion from @Kanade-dev)
+    if (analysis.rhythm && analysis.rhythm.beatAnalysis) {
+      const time = eventIndex * 10; // Approximate time
+      const measureTime = time % (96 * 4);
+      const beatPosition = measureTime / 96;
+      const beatIndex = Math.floor(beatPosition);
+      const beatData = analysis.rhythm.beatAnalysis[beatIndex];
+      
+      if (beatData) {
+        // Strong beats get slight velocity boost
+        const beatStrengthBoost = (beatData.strength - 0.5) * intensity * 0.1;
+        adjustment += beatStrengthBoost;
       }
     }
     
