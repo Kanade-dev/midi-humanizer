@@ -48,29 +48,70 @@ class MIDIHumanizer {
     }
   }
 
-  // Simple synthesizer for MIDI note playback
-  createNoteOscillator(frequency, velocity = 64, duration = 1000) {
+  // Advanced synthesizer for smooth MIDI note playback
+  createPianoNote(frequency, velocity = 64, startTime, duration = 1000) {
     if (!this.audioContext) return null;
 
-    const oscillator = this.audioContext.createOscillator();
-    const gainNode = this.audioContext.createGain();
+    // Create multiple oscillators for richer piano-like sound
+    const fundamental = this.audioContext.createOscillator();
+    const harmonic2 = this.audioContext.createOscillator();
+    const harmonic3 = this.audioContext.createOscillator();
     
-    // Configure oscillator for piano-like sound
-    oscillator.type = 'triangle';
-    oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
+    // Create gain nodes for each oscillator
+    const fundamentalGain = this.audioContext.createGain();
+    const harmonic2Gain = this.audioContext.createGain();
+    const harmonic3Gain = this.audioContext.createGain();
+    const masterGain = this.audioContext.createGain();
     
-    // Configure volume based on MIDI velocity
-    const volume = Math.max(0.1, Math.min(0.8, velocity / 127 * 0.6));
-    gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
-    gainNode.gain.linearRampToValueAtTime(volume, this.audioContext.currentTime + 0.01);
-    gainNode.gain.exponentialRampToValueAtTime(volume * 0.3, this.audioContext.currentTime + duration / 1000 * 0.3);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration / 1000);
+    // Configure oscillators for piano-like timbre
+    fundamental.type = 'sine';
+    harmonic2.type = 'triangle';
+    harmonic3.type = 'sawtooth';
     
-    // Connect audio nodes
-    oscillator.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
+    fundamental.frequency.setValueAtTime(frequency, startTime);
+    harmonic2.frequency.setValueAtTime(frequency * 2.01, startTime); // Slightly detuned for realism
+    harmonic3.frequency.setValueAtTime(frequency * 3.02, startTime);
     
-    return { oscillator, gainNode };
+    // Set relative volumes for harmonics
+    const baseVolume = Math.max(0.05, Math.min(0.8, velocity / 127 * 0.5));
+    fundamentalGain.gain.setValueAtTime(baseVolume, startTime);
+    harmonic2Gain.gain.setValueAtTime(baseVolume * 0.3, startTime);
+    harmonic3Gain.gain.setValueAtTime(baseVolume * 0.1, startTime);
+    
+    // Create realistic piano envelope (ADSR)
+    const attackTime = 0.01;
+    const decayTime = duration / 1000 * 0.2;
+    const sustainLevel = baseVolume * 0.6;
+    const releaseTime = duration / 1000 * 0.8;
+    
+    masterGain.gain.setValueAtTime(0, startTime);
+    masterGain.gain.linearRampToValueAtTime(baseVolume, startTime + attackTime);
+    masterGain.gain.exponentialRampToValueAtTime(sustainLevel, startTime + attackTime + decayTime);
+    masterGain.gain.exponentialRampToValueAtTime(0.001, startTime + duration / 1000);
+    
+    // Connect the audio graph
+    fundamental.connect(fundamentalGain);
+    harmonic2.connect(harmonic2Gain);
+    harmonic3.connect(harmonic3Gain);
+    
+    fundamentalGain.connect(masterGain);
+    harmonic2Gain.connect(masterGain);
+    harmonic3Gain.connect(masterGain);
+    masterGain.connect(this.audioContext.destination);
+    
+    // Schedule oscillator start and stop with precise timing
+    fundamental.start(startTime);
+    harmonic2.start(startTime);
+    harmonic3.start(startTime);
+    
+    fundamental.stop(startTime + duration / 1000 + 0.1);
+    harmonic2.stop(startTime + duration / 1000 + 0.1);
+    harmonic3.stop(startTime + duration / 1000 + 0.1);
+    
+    return { 
+      oscillators: [fundamental, harmonic2, harmonic3], 
+      gains: [fundamentalGain, harmonic2Gain, harmonic3Gain, masterGain] 
+    };
   }
 
   // Convert MIDI note number to frequency
@@ -93,11 +134,11 @@ class MIDIHumanizer {
     this.stopProgressTracking(); // Clear any existing interval
     this.progressInterval = setInterval(() => {
       if (this.isPlaying && this.audioContext) {
-        const elapsed = (this.audioContext.currentTime - this.playbackStartTime) * 1000; // Convert to milliseconds
-        const progress = Math.min(elapsed / this.playbackDuration, 1);
-        this.updateProgressIndicator(progress);
+        const elapsed = (this.audioContext.currentTime - this.playbackStartTime - 0.1) * 1000; // Subtract initial delay
+        const progress = Math.max(0, Math.min(elapsed / this.playbackDuration, 1));
+        this.updateVisualizationProgress(progress);
       }
-    }, 50); // Update every 50ms for smooth animation
+    }, 30); // Update every 30ms for ultra-smooth animation
   }
 
   stopProgressTracking() {
@@ -105,10 +146,10 @@ class MIDIHumanizer {
       clearInterval(this.progressInterval);
       this.progressInterval = null;
     }
-    this.updateProgressIndicator(0); // Reset progress
+    this.updateVisualizationProgress(0); // Reset progress
   }
 
-  updateProgressIndicator(progress) {
+  updateVisualizationProgress(progress) {
     // Update progress in visualization instead of progress bar
     if (this.currentVisualizationMode) {
       this.updateVisualizationProgress(progress);
@@ -155,7 +196,7 @@ class MIDIHumanizer {
     }
   }
 
-  // Play MIDI data using Web Audio API
+  // Play MIDI data using Web Audio API with precise scheduling
   async playMIDIData(midiData, isOriginal = true) {
     if (!this.audioContext) {
       alert('Web Audio APIがサポートされていません。ブラウザを更新してお試しください。');
@@ -179,17 +220,18 @@ class MIDIHumanizer {
     console.log(`Playing ${isOriginal ? 'original' : 'humanized'} MIDI...`);
 
     try {
-      // Process all tracks
+      // Process all tracks and collect note events
+      const noteEvents = [];
       let maxTime = 0;
       const tempo = 120; // Default tempo (BPM)
       const division = midiData.header.division || 96; // Ticks per quarter note
       
       midiData.tracks.forEach((track, trackIndex) => {
-        let activeNotes = new Map(); // Track active notes for note-off events
+        const activeNotes = new Map();
         
         track.forEach(event => {
-          // Convert MIDI ticks to milliseconds
-          const realTime = (event.time / division) * (60000 / tempo);
+          // Convert MIDI ticks to seconds
+          const realTimeSeconds = (event.time / division) * (60 / tempo);
           
           if (event.status >= 0x80 && event.status <= 0x9F) { // Note events
             const isNoteOn = (event.status & 0xF0) === 0x90 && event.data2 > 0;
@@ -198,60 +240,72 @@ class MIDIHumanizer {
             if (isNoteOn) {
               const noteNumber = event.data1;
               const velocity = event.data2;
-              const frequency = this.midiNoteToFrequency(noteNumber);
+              const noteKey = `${noteNumber}_${trackIndex}`;
               
-              const timeout = setTimeout(() => {
-                if (this.isPlaying) {
-                  const noteData = this.createNoteOscillator(frequency, velocity, 500);
-                  if (noteData) {
-                    noteData.oscillator.start();
-                    activeNotes.set(noteNumber, noteData);
-                    
-                    // Auto-stop note after duration if no explicit note-off
-                    setTimeout(() => {
-                      if (activeNotes.has(noteNumber)) {
-                        const note = activeNotes.get(noteNumber);
-                        try {
-                          note.oscillator.stop();
-                        } catch (e) {
-                          // Note may already be stopped
-                        }
-                        activeNotes.delete(noteNumber);
-                      }
-                    }, 500);
-                  }
-                }
-              }, Math.max(0, realTime));
-              
-              this.currentPlayback.push(timeout);
+              activeNotes.set(noteKey, {
+                noteNumber,
+                velocity,
+                startTime: realTimeSeconds,
+                trackIndex
+              });
             } else if (isNoteOff) {
               const noteNumber = event.data1;
+              const noteKey = `${noteNumber}_${trackIndex}`;
               
-              const timeout = setTimeout(() => {
-                if (activeNotes.has(noteNumber)) {
-                  const note = activeNotes.get(noteNumber);
-                  try {
-                    note.oscillator.stop();
-                  } catch (e) {
-                    // Note may already be stopped
-                  }
-                  activeNotes.delete(noteNumber);
-                }
-              }, Math.max(0, realTime));
-              
-              this.currentPlayback.push(timeout);
+              if (activeNotes.has(noteKey)) {
+                const noteData = activeNotes.get(noteKey);
+                const duration = Math.max(0.1, (realTimeSeconds - noteData.startTime) * 1000); // Convert to ms
+                
+                noteEvents.push({
+                  noteNumber: noteData.noteNumber,
+                  velocity: noteData.velocity,
+                  startTime: noteData.startTime,
+                  duration: duration,
+                  trackIndex: noteData.trackIndex
+                });
+                
+                activeNotes.delete(noteKey);
+                maxTime = Math.max(maxTime, realTimeSeconds);
+              }
             }
           }
-          
-          maxTime = Math.max(maxTime, realTime);
+        });
+        
+        // Handle any remaining active notes (notes without explicit note-off)
+        activeNotes.forEach(noteData => {
+          const duration = 500; // Default duration in ms
+          noteEvents.push({
+            noteNumber: noteData.noteNumber,
+            velocity: noteData.velocity,
+            startTime: noteData.startTime,
+            duration: duration,
+            trackIndex: noteData.trackIndex
+          });
+          maxTime = Math.max(maxTime, noteData.startTime + duration / 1000);
         });
       });
 
-      // Auto-stop playback after all notes
-      this.playbackDuration = maxTime;
+      // Schedule all notes using Web Audio's precise timing
+      const audioStartTime = this.audioContext.currentTime + 0.1; // Small delay to ensure smooth start
+      
+      noteEvents.forEach(noteEvent => {
+        const frequency = this.midiNoteToFrequency(noteEvent.noteNumber);
+        const scheduleTime = audioStartTime + noteEvent.startTime;
+        
+        try {
+          this.createPianoNote(frequency, noteEvent.velocity, scheduleTime, noteEvent.duration);
+        } catch (error) {
+          console.warn('Error creating note:', error);
+        }
+      });
+
+      // Set playback duration and auto-stop
+      this.playbackDuration = maxTime * 1000; // Convert to milliseconds
+      
+      // Use a more precise timeout for stopping playback
       const stopTimeout = setTimeout(() => {
         this.stopPlayback();
-      }, maxTime + 1000);
+      }, this.playbackDuration + 1000);
       
       this.currentPlayback.push(stopTimeout);
       
