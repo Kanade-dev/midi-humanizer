@@ -1535,11 +1535,10 @@ class MIDIHumanizer {
     // Add MIDI visualization section
     const visualizationHtml = `
       <div class="midi-visualization-subsection">
-        <h3>MIDI視覚化 - フレーズ構造と比較</h3>
+        <h3>MIDI視覚化 - フレーズ構造表示</h3>
         <div class="visualization-controls">
           <button class="viz-button active" onclick="midiHumanizer.showVisualization('timeline', this)">タイムライン表示</button>
           <button class="viz-button" onclick="midiHumanizer.showVisualization('phrases', this)">フレーズ構造</button>
-          <button class="viz-button" onclick="midiHumanizer.showVisualization('comparison', this)">ビフォー・アフター比較</button>
         </div>
         <div id="midiVisualization" class="midi-visualization-container">
           <!-- Visualization will be rendered here -->
@@ -2032,8 +2031,7 @@ class MIDIHumanizer {
       const buttons = document.querySelectorAll('.viz-button');
       buttons.forEach(btn => {
         if ((mode === 'timeline' && btn.textContent.includes('タイムライン')) ||
-            (mode === 'phrases' && btn.textContent.includes('フレーズ')) ||
-            (mode === 'comparison' && btn.textContent.includes('ビフォー'))) {
+            (mode === 'phrases' && btn.textContent.includes('フレーズ'))) {
           buttonToActivate = btn;
         }
       });
@@ -2051,9 +2049,6 @@ class MIDIHumanizer {
       case 'phrases':
         this.renderPhraseVisualization();
         break;
-      case 'comparison':
-        this.renderComparisonVisualization();
-        break;
     }
   }
 
@@ -2065,7 +2060,7 @@ class MIDIHumanizer {
     const phrases = this.lastAnalysis.tracks[0].phrasing;
     
     // Initialize zoom level if not set
-    if (!this.zoomLevel) this.zoomLevel = 1;
+    if (!this.zoomLevel) this.zoomLevel = 5;
     
     canvas.innerHTML = `
       <div class="timeline-container">
@@ -2093,46 +2088,30 @@ class MIDIHumanizer {
     const phrases = this.lastAnalysis.tracks[0].phrasing;
     const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
     
+    // Initialize zoom level if not set
+    if (!this.zoomLevel) this.zoomLevel = 5;
+    
     canvas.innerHTML = `
       <div class="phrase-container">
         <h4>フレーズ構造表示</h4>
+        <div class="timeline-controls">
+          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(-0.5)">ズームアウト</button>
+          <span class="zoom-level">縮尺: ${this.zoomLevel.toFixed(1)}x</span>
+          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(0.5)">ズームイン</button>
+          <button class="zoom-control" onclick="midiHumanizer.resetZoom()">リセット</button>
+        </div>
+        <div class="timeline-track">
+          ${this.renderNoteTimeline(originalNotes, phrases)}
+        </div>
+        <div class="timeline-ruler">
+          ${this.renderTimeRuler(originalNotes)}
+        </div>
         <div class="phrase-visualization">
           ${this.renderPhraseStructure(phrases, originalNotes)}
         </div>
         <div class="phrase-info">
           <p>検出されたフレーズ数: <strong>${phrases.length}</strong></p>
           <p>平均フレーズ長: <strong>${this.calculateAveragePhraseLength(phrases).toFixed(1)}秒</strong></p>
-        </div>
-      </div>
-    `;
-  }
-
-  renderComparisonVisualization() {
-    const canvas = document.getElementById('visualizationCanvas');
-    if (!canvas) return;
-    
-    const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
-    const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
-    
-    canvas.innerHTML = `
-      <div class="comparison-container">
-        <h4>ビフォー・アフター比較</h4>
-        <div class="comparison-tracks">
-          <div class="comparison-track original-track">
-            <h5>オリジナル</h5>
-            <div class="notes-container">
-              ${this.renderNotesComparison(originalNotes, 'original')}
-            </div>
-          </div>
-          <div class="comparison-track humanized-track">
-            <h5>ヒューマナイズ後</h5>
-            <div class="notes-container">
-              ${this.renderNotesComparison(humanizedNotes, 'humanized')}
-            </div>
-          </div>
-        </div>
-        <div class="comparison-stats">
-          ${this.renderComparisonStats(originalNotes, humanizedNotes)}
         </div>
       </div>
     `;
@@ -2226,13 +2205,23 @@ class MIDIHumanizer {
   }
 
   adjustZoom(delta) {
-    this.zoomLevel = Math.max(0.5, Math.min(5, (this.zoomLevel || 1) + delta));
-    this.renderTimelineVisualization();
+    this.zoomLevel = Math.max(0.5, Math.min(5, (this.zoomLevel || 5) + delta));
+    // Re-render the current visualization mode
+    if (this.currentVisualizationMode === 'phrases') {
+      this.renderPhraseVisualization();
+    } else {
+      this.renderTimelineVisualization();
+    }
   }
 
   resetZoom() {
-    this.zoomLevel = 1;
-    this.renderTimelineVisualization();
+    this.zoomLevel = 5;
+    // Re-render the current visualization mode
+    if (this.currentVisualizationMode === 'phrases') {
+      this.renderPhraseVisualization();
+    } else {
+      this.renderTimelineVisualization();
+    }
   }
 
   renderTimeRuler(notes) {
@@ -2285,74 +2274,6 @@ class MIDIHumanizer {
     
     html += '</div>';
     return html;
-  }
-
-  renderNotesComparison(notes, type) {
-    if (notes.length === 0) return '<p>ノートが見つかりません</p>';
-    
-    const maxTime = Math.max(...notes.map(n => n.endTime));
-    const minPitch = Math.min(...notes.map(n => n.pitch));
-    const maxPitch = Math.max(...notes.map(n => n.pitch));
-    const pitchRange = maxPitch - minPitch;
-    
-    let html = '<div class="comparison-notes">';
-    
-    notes.slice(0, 50).forEach((note, index) => { // Limit to first 50 notes for performance
-      const left = (note.startTime / maxTime) * 100;
-      const width = ((note.endTime - note.startTime) / maxTime) * 100;
-      const top = ((maxPitch - note.pitch) / Math.max(1, pitchRange)) * 100;
-      const height = Math.max(2, 100 / Math.max(1, pitchRange));
-      
-      html += `
-        <div class="comparison-note ${type}" 
-             style="left: ${left}%; width: ${width}%; top: ${top}%; height: ${height}%"
-             title="音程: ${note.pitch}, 音量: ${note.velocity}">
-        </div>
-      `;
-    });
-    
-    html += '</div>';
-    return html;
-  }
-
-  renderComparisonStats(originalNotes, humanizedNotes) {
-    const originalAvgVelocity = originalNotes.reduce((sum, n) => sum + n.velocity, 0) / originalNotes.length;
-    const humanizedAvgVelocity = humanizedNotes.reduce((sum, n) => sum + n.velocity, 0) / humanizedNotes.length;
-    
-    const originalAvgDuration = originalNotes.reduce((sum, n) => sum + (n.endTime - n.startTime), 0) / originalNotes.length;
-    const humanizedAvgDuration = humanizedNotes.reduce((sum, n) => sum + (n.endTime - n.startTime), 0) / humanizedNotes.length;
-    
-    return `
-      <div class="stats-comparison">
-        <h5>統計比較</h5>
-        <div class="stats-grid">
-          <div class="stat-item">
-            <label>平均音量</label>
-            <div class="stat-values">
-              <span class="original-stat">${originalAvgVelocity.toFixed(1)}</span>
-              <span class="arrow">→</span>
-              <span class="humanized-stat">${humanizedAvgVelocity.toFixed(1)}</span>
-            </div>
-          </div>
-          <div class="stat-item">
-            <label>平均音長</label>
-            <div class="stat-values">
-              <span class="original-stat">${(originalAvgDuration/480).toFixed(2)}s</span>
-              <span class="arrow">→</span>
-              <span class="humanized-stat">${(humanizedAvgDuration/480).toFixed(2)}s</span>
-            </div>
-          </div>
-          <div class="stat-item">
-            <label>ノート数</label>
-            <div class="stat-values">
-              <span class="original-stat">${originalNotes.length}</span>
-              <span class="arrow">→</span>
-              <span class="humanized-stat">${humanizedNotes.length}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
   }
 
   calculateAveragePhraseLength(phrases) {
