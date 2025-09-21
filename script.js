@@ -138,15 +138,16 @@ class MIDIHumanizer {
         top: 0;
         bottom: 0;
         width: 3px;
-        background: #ff4444;
-        z-index: 100;
+        background: linear-gradient(to bottom, #ff4444, #ff6666);
+        z-index: 1000;
         box-shadow: 0 0 8px rgba(255, 68, 68, 0.6);
         left: ${progress * 100}%;
         pointer-events: none;
+        border-radius: 2px;
       `;
       
       // Find the appropriate container based on current mode
-      const timelineContainer = canvas.querySelector('.timeline-visualization, .phrase-visualization, .notes-container');
+      const timelineContainer = canvas.querySelector('.timeline-track, .phrase-visualization, .phrase-blocks');
       if (timelineContainer) {
         timelineContainer.style.position = 'relative';
         timelineContainer.appendChild(indicator);
@@ -955,7 +956,7 @@ class MIDIHumanizer {
     
     // Generate boundary candidates (with minimum spacing to reduce granularity)
     const candidates = [];
-    const minPhraseLength = 480 * 2; // Minimum 2 beats between phrases
+    const minPhraseLength = 480 * 0.5; // Minimum 0.5 beats between phrases (increased sensitivity)
     let lastTime = 0;
     
     for (let i = 2; i < notes.length - 2; i++) { // Start from 2nd note, end 2 notes before end
@@ -976,12 +977,12 @@ class MIDIHumanizer {
       return { ...candidate, score };
     });
     
-    // Set configurable weights for more cohesive phrases
+    // Set configurable weights for more sensitive phrase detection
     const weights = {
-      gap: 3.0,        // w1: ギャップ・スコア (increased importance)
-      duration: 1.5,   // w2: 先行音符の長さスコア  
-      contour: 1.0,    // w3: メロディ輪郭スコア
-      cadence: 4.0     // w4: カデンツ・スコア (most important)
+      gap: 2.0,        // w1: ギャップ・スコア (moderate importance)
+      duration: 2.0,   // w2: 先行音符の長さスコア (increased importance)
+      contour: 1.5,    // w3: メロディ輪郭スコア (increased importance)
+      cadence: 2.5     // w4: カデンツ・スコア (reduced dominance)
     };
     
     // Calculate weighted total scores
@@ -993,8 +994,8 @@ class MIDIHumanizer {
         (weights.cadence * candidate.score.cadence);
     });
     
-    // Set higher threshold for more cohesive phrases
-    const threshold = 1.2; // Increased from 0.8 to detect fewer, stronger boundaries
+    // Set lower threshold for more sensitive phrase detection
+    const threshold = 0.3; // Further decreased to detect more phrase boundaries
     
     // Debug: Log scoring information for development
     if (scoredCandidates.length > 0) {
@@ -1007,11 +1008,11 @@ class MIDIHumanizer {
       });
     }
     
-    // Select boundaries above threshold, limit to maximum of 3 phrases for simpler structure
+    // Select boundaries above threshold, allow more phrases for better granularity
     const boundaries = scoredCandidates
       .filter(candidate => candidate.totalScore > threshold)
       .sort((a, b) => b.totalScore - a.totalScore) // Sort by score (highest first)
-      .slice(0, 2) // Maximum 2 boundaries = 3 phrases
+      .slice(0, 4) // Maximum 4 boundaries = 5 phrases (increased from 2)
       .map(candidate => candidate.time)
       .sort((a, b) => a - b); // Sort by time
     
