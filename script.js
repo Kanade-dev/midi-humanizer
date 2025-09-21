@@ -1164,7 +1164,7 @@ class MIDIHumanizer {
       let noteChangeScore = 0;
       
       // Large time gaps suggest phrase boundaries
-      if (timeDiff > grid.ticksPerBeat / 4) {
+      if (timeDiff > grid.ticksPerBeat) { // Changed from /4 to full beat
         noteChangeScore += Math.min(1, timeDiff / grid.ticksPerBeat) * 0.8;
       }
       
@@ -1179,7 +1179,7 @@ class MIDIHumanizer {
       }
       
       // Register significant changes
-      if (noteChangeScore > 0.3) {
+      if (noteChangeScore > 0.6) { // Increased threshold from 0.3 to 0.6
         changeScores.push({
           time: current.startTime,
           score: noteChangeScore,
@@ -1211,7 +1211,7 @@ class MIDIHumanizer {
       const rhythmScore = this.calculateRhythmicChange(windowNotes, nextWindowNotes);
       const combinedScore = Math.max(changeScore, rhythmScore * 0.5);
       
-      if (combinedScore > 0.2) { // Lower threshold for windowed analysis
+      if (combinedScore > 0.5) { // Increased threshold from 0.2 to 0.5 for windowed analysis
         changeScores.push({
           time: time,
           score: combinedScore,
@@ -1324,15 +1324,15 @@ class MIDIHumanizer {
     }
     
     const peaks = [];
-    const minPhraseLength = Math.max(grid.ticksPerBeat / 2, 24); // Smaller minimum distance
+    const minPhraseLength = Math.max(grid.ticksPerBeat * 2, 192); // Minimum 2 beats for meaningful phrases
     
     // Sort scores by weighted value to find most significant changes
     const sortedScores = [...weightedScores].sort((a, b) => b.weightedScore - a.weightedScore);
     
-    // Use adaptive threshold based on the score distribution
+    // Use adaptive threshold based on the score distribution  
     const maxScore = sortedScores[0]?.weightedScore || 0;
     const avgScore = weightedScores.reduce((sum, s) => sum + s.weightedScore, 0) / weightedScores.length;
-    const dynamicThreshold = Math.max(0.02, Math.min(maxScore * 0.3, avgScore * 1.5));
+    const dynamicThreshold = Math.max(0.4, Math.min(maxScore * 0.5, avgScore * 2.0)); // More conservative thresholds
     
     console.log('Peak detection parameters:', {
       totalScores: weightedScores.length,
