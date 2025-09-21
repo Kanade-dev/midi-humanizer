@@ -1106,17 +1106,17 @@ class MIDIHumanizer {
     // Apply intelligent post-processing to merge fragmented phrases
     const improvedPhrases = this.mergeFragmentedPhrases(rawPhrases, grid);
     
-    // Second pass: Look for pattern-based merging to create longer, more musical phrases
-    const patternMergedPhrases = this.mergeBasedOnPatterns(improvedPhrases, grid);
+    // Second pass: Create measure-aligned phrases instead of merging
+    const measureBasedPhrases = this.createMeasureAlignedPhrases(improvedPhrases, grid);
     
     console.log('Phrase improvement:', {
       beforeMerging: rawPhrases.length,
       afterFirstMerge: improvedPhrases.length,
-      afterPatternMerge: patternMergedPhrases.length,
-      totalImprovement: Math.round((rawPhrases.length - patternMergedPhrases.length) / rawPhrases.length * 100) + '%'
+      afterMeasureAlignment: measureBasedPhrases.length,
+      totalImprovement: Math.round((rawPhrases.length - measureBasedPhrases.length) / rawPhrases.length * 100) + '%'
     });
     
-    return patternMergedPhrases;
+    return measureBasedPhrases;
   }
 
   calculateBeatMeasureGrid(track, notes) {
@@ -1675,84 +1675,94 @@ class MIDIHumanizer {
     const duration2 = (phrase2.end - phrase2.start) / grid.ticksPerBeat;
     const gap = (phrase2.start - phrase1.end) / grid.ticksPerBeat;
     
-    // Rule 1: Merge if either phrase is very short (< 2 beats)
-    if (duration1 < 2 || duration2 < 2) {
+    // Only merge very small fragments, let measure-based analysis handle the rest
+    
+    // Rule 1: Merge single-note phrases with very small gaps
+    if (phrase1.notes.length === 1 && phrase2.notes.length === 1 && gap < 0.5) {
       return true;
     }
     
-    // Rule 2: Merge if combined duration would be reasonable (< 8 beats) and gap is small
-    if ((duration1 + duration2) < 8 && gap < 1) {
+    // Rule 2: Merge if both phrases are extremely short (< 0.5 beats each)
+    if (duration1 < 0.5 && duration2 < 0.5) {
       return true;
     }
     
-    // Rule 3: Merge single-note phrases aggressively
-    if (phrase1.notes.length === 1 || phrase2.notes.length === 1) {
+    // Rule 3: Merge if gap is tiny (notes probably belong together)
+    if (gap < 0.25) {
       return true;
     }
     
-    // Rule 4: Merge if both phrases have very few notes
-    if (phrase1.notes.length <= 3 && phrase2.notes.length <= 3 && gap < 2) {
-      return true;
-    }
-    
-    // Rule 5: Merge if gap is very small regardless of durations
-    if (gap < 0.5) {
+    // Rule 4: Merge if first phrase is a single short note and gap is small
+    if (phrase1.notes.length === 1 && duration1 < 1 && gap < 1) {
       return true;
     }
     
     return false;
   }
 
-  mergeBasedOnPatterns(phrases, grid) {
-    if (phrases.length <= 1) return phrases;
+  createMeasureAlignedPhrases(phrases, grid) {
+    // Create phrases based on measure boundaries (1, 2, 4, 8 measures) as suggested by Kanade-dev
+    const measureLength = grid.ticksPerMeasure;
+    const totalTicks = grid.totalTicks;
+    const newPhrases = [];
     
-    const mergedPhrases = [];
-    let i = 0;
+    // Calculate optimal phrase lengths for this piece
+    const preferredMeasureCounts = [2, 4, 8, 1]; // Priority order: 2, 4, 8, then 1 measure phrases
     
-    while (i < phrases.length) {
-      let currentPhrase = phrases[i];
-      let merged = false;
+    let currentTick = 0;
+    
+    while (currentTick < totalTicks) {
+      let bestPhraseLength = measureLength; // Default to 1 measure
       
-      // Look ahead for phrases that could be merged to create ~4 second phrases
-      const targetDuration = 16; // ~4 seconds in beats (at 120 BPM)
-      let j = i + 1;
-      
-      while (j < phrases.length && !merged) {
-        const combinedDuration = (phrases[j].end - currentPhrase.start) / grid.ticksPerBeat;
-        const gap = (phrases[j].start - currentPhrase.end) / grid.ticksPerBeat;
+      // Try different measure counts to find the best fit
+      for (const measureCount of preferredMeasureCounts) {
+        const candidateLength = measureCount * measureLength;
+        const remainingTicks = totalTicks - currentTick;
         
-        // If we can create a phrase close to 4 seconds, do it
-        if (combinedDuration >= 12 && combinedDuration <= 20 && gap < 4) { // 3-5 seconds with reasonable gaps
-          // Merge all phrases from i to j
-          const mergedNotes = [];
-          for (let k = i; k <= j; k++) {
-            mergedNotes.push(...phrases[k].notes);
+        // If this phrase length fits well and aligns with musical structure
+        if (candidateLength <= remainingTicks && 
+            (candidateLength <= remainingTicks * 0.8 || candidateLength === remainingTicks)) {
+          
+          // Check if there are notes in this range
+          const notesInRange = this.getNotesInRange(phrases, currentTick, currentTick + candidateLength);
+          
+          if (notesInRange.length > 0) {
+            bestPhraseLength = candidateLength;
+            break;
           }
-          
-          currentPhrase = {
-            start: currentPhrase.start,
-            end: phrases[j].end,
-            notes: mergedNotes
-          };
-          
-          i = j + 1; // Skip all merged phrases
-          merged = true;
-        } else if (combinedDuration > 20) {
-          // Too long, stop looking
-          break;
-        } else {
-          j++;
         }
       }
       
-      if (!merged) {
-        i++;
+      // Create phrase for this measure-based segment
+      const phraseEnd = Math.min(currentTick + bestPhraseLength, totalTicks);
+      const notesInPhrase = this.getNotesInRange(phrases, currentTick, phraseEnd);
+      
+      if (notesInPhrase.length > 0) {
+        newPhrases.push({
+          start: currentTick,
+          end: phraseEnd,
+          notes: notesInPhrase
+        });
       }
       
-      mergedPhrases.push(currentPhrase);
+      currentTick = phraseEnd;
     }
     
-    return mergedPhrases;
+    return newPhrases;
+  }
+
+  getNotesInRange(phrases, startTick, endTick) {
+    const notesInRange = [];
+    
+    phrases.forEach(phrase => {
+      phrase.notes.forEach(note => {
+        if (note.time >= startTick && note.time < endTick) {
+          notesInRange.push(note);
+        }
+      });
+    });
+    
+    return notesInRange.sort((a, b) => a.time - b.time);
   }
 
   // New phrase detection methods based on musical patterns
