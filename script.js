@@ -2881,7 +2881,7 @@ class MIDIHumanizer {
     const timingInfluence = (velocityNormalized - 0.5) * intensity * 0.1;
     // This will be used in timing adjustments elsewhere
     
-    // Apply melodic peak emphasis
+    // Apply enhanced melodic peak emphasis for dynamic expression
     const melodyNote = analysis.melody.notes.find(m => 
       Math.abs(m.time - eventIndex * 10) < 50 && m.pitch === note
     );
@@ -2892,8 +2892,37 @@ class MIDIHumanizer {
       );
       
       if (peak) {
-        // Emphasize melodic peaks
-        adjustment += intensity * peak.intensity * 0.3;
+        // Create more dramatic emphasis for melodic peaks
+        let peakBoost = intensity * peak.intensity * 0.5;
+        
+        // Style-specific peak emphasis
+        switch(style) {
+          case 'classical':
+            // Classical music: more dramatic peaks with approach and departure
+            peakBoost *= 1.6;
+            break;
+          case 'jazz':
+            // Jazz: accent syncopated and off-beat peaks more
+            peakBoost *= 1.2;
+            break;
+          case 'pop':
+            // Pop: consistent but moderate peak emphasis
+            peakBoost *= 0.9;
+            break;
+        }
+        
+        adjustment += peakBoost;
+        
+        // Add approach and departure to peaks for more natural expression
+        const peakNote = analysis.melody.notes[peak.index];
+        const approachDistance = Math.abs(melodyNote.time - peakNote.time) / 96; // Distance in beats
+        if (approachDistance < 2) {
+          const approachFactor = 1 - (approachDistance / 2);
+          adjustment += intensity * approachFactor * 0.3; // Buildup to peak
+        }
+      } else {
+        // Non-peak notes: slight reduction for contrast
+        adjustment -= intensity * 0.1;
       }
     }
 
@@ -2925,19 +2954,102 @@ class MIDIHumanizer {
       }
     }
     
-    // Apply phrase-based dynamics
+    // Apply enhanced phrase-based dynamics for human-like expression
     const phrase = analysis.phrasing.find(p => 
       eventIndex * 10 >= p.start && eventIndex * 10 <= p.end
     );
     
     if (phrase) {
       const phrasePosition = (eventIndex * 10 - phrase.start) / (phrase.end - phrase.start);
+      const phraseDuration = (phrase.end - phrase.start) / 480; // Convert to seconds
       
-      // Crescendo toward phrase middle, diminuendo at end
-      if (phrasePosition < 0.6) {
-        adjustment += intensity * phrasePosition * 8;
+      // Create more sophisticated phrase dynamics based on musical expression principles
+      let phraseAdjustment = 0;
+      
+      // Different dynamic curves based on phrase length and style
+      if (phraseDuration < 2) {
+        // Short phrases: gentle crescendo to 70%, then diminuendo
+        if (phrasePosition < 0.7) {
+          phraseAdjustment = intensity * Math.sin(phrasePosition * Math.PI * 0.7) * 12;
+        } else {
+          phraseAdjustment = intensity * Math.sin((1 - phrasePosition) * Math.PI * 2) * 8;
+        }
+      } else if (phraseDuration < 4) {
+        // Medium phrases: build to 60%, sustain, then diminuendo
+        if (phrasePosition < 0.4) {
+          phraseAdjustment = intensity * (phrasePosition / 0.4) * 15;
+        } else if (phrasePosition < 0.7) {
+          phraseAdjustment = intensity * 15; // Sustained intensity
+        } else {
+          phraseAdjustment = intensity * (1 - phrasePosition) * 20;
+        }
       } else {
-        adjustment -= intensity * (phrasePosition - 0.6) * 12;
+        // Long phrases: complex multi-peak dynamics
+        const peaks = Math.floor(phraseDuration / 2); // One peak every 2 seconds
+        const peakPosition = phrasePosition * peaks;
+        const localPosition = peakPosition - Math.floor(peakPosition);
+        phraseAdjustment = intensity * Math.sin(localPosition * Math.PI) * 10;
+        
+        // Overall phrase arc
+        if (phrasePosition < 0.3) {
+          phraseAdjustment += intensity * phrasePosition * 8;
+        } else if (phrasePosition > 0.8) {
+          phraseAdjustment -= intensity * (phrasePosition - 0.8) * 25;
+        }
+      }
+      
+      // Style-specific adjustments to phrase dynamics
+      switch(style) {
+        case 'classical':
+          // More dramatic crescendos and diminuendos
+          phraseAdjustment *= 1.4;
+          break;
+        case 'jazz':
+          // More irregular, syncopated dynamics
+          phraseAdjustment *= (0.8 + Math.sin(phrasePosition * Math.PI * 4) * 0.3);
+          break;
+        case 'pop':
+          // More consistent, less dramatic changes
+          phraseAdjustment *= 0.7;
+          break;
+      }
+      
+      adjustment += phraseAdjustment;
+    }
+    
+    // Add inter-phrase dynamics for larger musical arc
+    if (analysis.phrasing && analysis.phrasing.length > 1) {
+      const currentPhraseIndex = analysis.phrasing.findIndex(p => 
+        eventIndex * 10 >= p.start && eventIndex * 10 <= p.end
+      );
+      
+      if (currentPhraseIndex !== -1) {
+        const totalPhrases = analysis.phrasing.length;
+        const phraseProgress = currentPhraseIndex / Math.max(1, totalPhrases - 1);
+        
+        // Create overall musical arc across all phrases
+        let arcAdjustment = 0;
+        
+        if (totalPhrases <= 3) {
+          // Short pieces: gentle overall crescendo then diminuendo
+          if (phraseProgress < 0.6) {
+            arcAdjustment = intensity * phraseProgress * 8;
+          } else {
+            arcAdjustment = intensity * (1 - phraseProgress) * 10;
+          }
+        } else {
+          // Longer pieces: more complex multi-wave dynamics
+          const wavePosition = phraseProgress * Math.PI;
+          arcAdjustment = intensity * Math.sin(wavePosition) * 6;
+          
+          // Add subtle terraced dynamics (stepwise changes between phrases)
+          if (currentPhraseIndex > 0) {
+            const isEvenPhrase = currentPhraseIndex % 2 === 0;
+            arcAdjustment += intensity * (isEvenPhrase ? 3 : -2);
+          }
+        }
+        
+        adjustment += arcAdjustment;
       }
     }
     
@@ -3746,8 +3858,8 @@ class MIDIHumanizer {
     
     // Calculate total duration and scale
     const totalDuration = Math.max(
-      originalNotes.length > 0 ? Math.max(...originalNotes.map(n => n.time + n.duration)) : 0,
-      humanizedNotes.length > 0 ? Math.max(...humanizedNotes.map(n => n.time + n.duration)) : 0
+      originalNotes.length > 0 ? Math.max(...originalNotes.map(n => n.endTime)) : 0,
+      humanizedNotes.length > 0 ? Math.max(...humanizedNotes.map(n => n.endTime)) : 0
     ) || 1000; // Default 1 second if no notes
     
     // Initialize zoom if not set
@@ -3810,8 +3922,8 @@ class MIDIHumanizer {
           <div class="timeline-label" style="font-weight: 600; margin-bottom: 0.5rem;">オリジナル</div>
           <div class="timeline-bar" style="position: relative; background: #f0f0f0; height: 20px; border-radius: 10px;">
             ${originalNotes.map(note => {
-              const startPercent = (note.time / totalDuration) * 100;
-              const widthPercent = Math.max(0.5, (note.duration / totalDuration) * 100);
+              const startPercent = (note.startTime / totalDuration) * 100;
+              const widthPercent = Math.max(0.5, ((note.endTime - note.startTime) / totalDuration) * 100);
               const intensity = note.velocity / 127;
               return `
                 <div class="note-block" style="
@@ -3836,8 +3948,8 @@ class MIDIHumanizer {
           <div class="timeline-label" style="font-weight: 600; margin-bottom: 0.5rem;">ヒューマナイズ後</div>
           <div class="timeline-bar" style="position: relative; background: #f0f0f0; height: 20px; border-radius: 10px;">
             ${humanizedNotes.map(note => {
-              const startPercent = (note.time / totalDuration) * 100;
-              const widthPercent = Math.max(0.5, (note.duration / totalDuration) * 100);
+              const startPercent = (note.startTime / totalDuration) * 100;
+              const widthPercent = Math.max(0.5, ((note.endTime - note.startTime) / totalDuration) * 100);
               const intensity = note.velocity / 127;
               return `
                 <div class="note-block" style="
