@@ -528,3 +528,370 @@ button:disabled {
     width: 100%;
   }
 }
+
+/* MIDI Visualization Styles */
+.midi-visualization-subsection {
+  background: #f8f9fa;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.visualization-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.viz-button {
+  background: white;
+  border: 2px solid var(--secondary-color);
+  color: var(--secondary-color);
+  padding: 0.5rem 1rem;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.9rem;
+}
+
+.viz-button:hover {
+  background: rgba(52, 152, 219, 0.1);
+}
+
+.viz-button.active {
+  background: var(--secondary-color);
+  color: white;
+}
+
+.midi-visualization-container {
+  background: white;
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: var(--shadow);
+  min-height: 300px;
+}
+
+.visualization-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.visualization-canvas {
+  flex: 1;
+  min-height: 250px;
+  background: #fafafa;
+  border-radius: 5px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+.visualization-legend {
+  display: flex;
+  gap: 1rem;
+  padding: 0.5rem;
+  background: #f0f0f0;
+  border-radius: 5px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+.legend-color.original {
+  background: var(--secondary-color);
+}
+
+.legend-color.humanized {
+  background: var(--success-color);
+}
+
+.legend-color.phrase-boundary {
+  background: var(--accent-color);
+}
+
+/* Timeline Visualization */
+.timeline-container {
+  position: relative;
+}
+
+.timeline-track {
+  position: relative;
+  height: 200px;
+  background: linear-gradient(to bottom, #fff 0%, #f8f9fa 100%);
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.timeline-notes {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.timeline-note {
+  position: absolute;
+  background: var(--secondary-color);
+  border-radius: 2px;
+  min-width: 2px;
+  height: 4px;
+  border: 1px solid rgba(44, 62, 80, 0.3);
+}
+
+.phrase-boundary {
+  position: absolute;
+  width: 2px;
+  height: 100%;
+  z-index: 10;
+}
+
+.phrase-boundary.start {
+  background: var(--accent-color);
+}
+
+.phrase-boundary.end {
+  background: #c0392b;
+}
+
+.phrase-span {
+  position: absolute;
+  height: 100%;
+  background: rgba(231, 76, 60, 0.1);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  z-index: 5;
+}
+
+.time-ruler {
+  position: relative;
+  height: 30px;
+  border: 1px solid #ddd;
+  background: #f8f9fa;
+  border-radius: 5px;
+}
+
+.time-marker {
+  position: absolute;
+  height: 100%;
+  border-left: 1px solid #999;
+}
+
+.time-label {
+  position: absolute;
+  top: 5px;
+  left: 3px;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+/* Phrase Visualization */
+.phrase-container h4 {
+  margin-bottom: 1rem;
+  color: var(--primary-color);
+}
+
+.phrase-visualization {
+  position: relative;
+  height: 150px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  margin-bottom: 1rem;
+}
+
+.phrase-blocks {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+}
+
+.phrase-block {
+  position: absolute;
+  height: calc(100% - 20px);
+  background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+  color: white;
+  border-radius: 5px;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 50px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.phrase-label {
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.phrase-details {
+  font-size: 0.8rem;
+  opacity: 0.9;
+  margin-top: 0.25rem;
+}
+
+.phrase-duration,
+.phrase-notes {
+  display: block;
+}
+
+.phrase-info {
+  background: #e8f5e8;
+  padding: 1rem;
+  border-radius: 5px;
+  border-left: 4px solid var(--success-color);
+}
+
+/* Comparison Visualization */
+.comparison-container h4 {
+  margin-bottom: 1rem;
+  color: var(--primary-color);
+}
+
+.comparison-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.comparison-track {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  padding: 1rem;
+}
+
+.comparison-track h5 {
+  margin: 0 0 0.5rem 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+
+.original-track h5 {
+  color: var(--secondary-color);
+}
+
+.humanized-track h5 {
+  color: var(--success-color);
+}
+
+.notes-container {
+  position: relative;
+  height: 100px;
+  background: #fafafa;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.comparison-notes {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.comparison-note {
+  position: absolute;
+  border-radius: 1px;
+  min-width: 1px;
+}
+
+.comparison-note.original {
+  background: var(--secondary-color);
+  opacity: 0.8;
+}
+
+.comparison-note.humanized {
+  background: var(--success-color);
+  opacity: 0.8;
+}
+
+.stats-comparison {
+  background: #f8f9fa;
+  padding: 1rem;
+  border-radius: 5px;
+  border: 1px solid #ddd;
+}
+
+.stats-comparison h5 {
+  margin: 0 0 1rem 0;
+  color: var(--primary-color);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-item label {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+  color: var(--primary-color);
+}
+
+.stat-values {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.original-stat {
+  color: var(--secondary-color);
+  font-weight: bold;
+}
+
+.humanized-stat {
+  color: var(--success-color);
+  font-weight: bold;
+}
+
+.arrow {
+  color: #666;
+  font-weight: bold;
+}
+
+@media (max-width: 768px) {
+  .visualization-controls {
+    flex-direction: column;
+  }
+  
+  .viz-button {
+    width: 100%;
+  }
+  
+  .comparison-tracks {
+    gap: 0.5rem;
+  }
+  
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .stat-values {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  
+  .arrow {
+    transform: rotate(90deg);
+  }
+}

@@ -1312,6 +1312,21 @@ class MIDIHumanizer {
     const integratedSection = document.createElement('div');
     integratedSection.className = 'integrated-section';
     
+    // Add MIDI visualization section
+    const visualizationHtml = `
+      <div class="midi-visualization-subsection">
+        <h3>MIDI視覚化 - フレーズ構造と比較</h3>
+        <div class="visualization-controls">
+          <button class="viz-button active" onclick="midiHumanizer.showVisualization('timeline', this)">タイムライン表示</button>
+          <button class="viz-button" onclick="midiHumanizer.showVisualization('phrases', this)">フレーズ構造</button>
+          <button class="viz-button" onclick="midiHumanizer.showVisualization('comparison', this)">ビフォー・アフター比較</button>
+        </div>
+        <div id="midiVisualization" class="midi-visualization-container">
+          <!-- Visualization will be rendered here -->
+        </div>
+      </div>
+    `;
+    
     // Add playback controls
     const playbackHtml = `
       <div class="playback-subsection">
@@ -1337,8 +1352,14 @@ class MIDIHumanizer {
       `;
     }
     
-    integratedSection.innerHTML = playbackHtml + analysisHtml;
+    integratedSection.innerHTML = visualizationHtml + playbackHtml + analysisHtml;
     container.insertBefore(integratedSection, container.firstChild);
+    
+    // Initialize MIDI visualization after the section is added to DOM
+    setTimeout(() => {
+      this.initializeMIDIVisualization();
+      this.showVisualization('timeline');
+    }, 100);
   }
 
   displayAnalysisResults(analysis, style) {
@@ -1736,6 +1757,365 @@ class MIDIHumanizer {
         element.classList.add('hidden');
       }
     });
+  }
+
+  // MIDI Visualization Functions
+  initializeMIDIVisualization() {
+    if (!this.originalMidiData || !this.humanizedMidiData || !this.lastAnalysis) {
+      console.warn('Cannot initialize visualization: Missing data');
+      return;
+    }
+    
+    this.currentVisualizationMode = 'timeline';
+    this.setupVisualizationContainer();
+  }
+
+  setupVisualizationContainer() {
+    const container = document.getElementById('midiVisualization');
+    if (!container) {
+      console.warn('Visualization container not found');
+      return;
+    }
+    
+    container.innerHTML = `
+      <div class="visualization-content">
+        <div id="visualizationCanvas" class="visualization-canvas"></div>
+        <div class="visualization-legend">
+          <div class="legend-item">
+            <div class="legend-color original"></div>
+            <span>オリジナル</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color humanized"></div>
+            <span>ヒューマナイズ後</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color phrase-boundary"></div>
+            <span>フレーズ境界</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  showVisualization(mode, targetButton = null) {
+    this.currentVisualizationMode = mode;
+    
+    // Update button states
+    document.querySelectorAll('.viz-button').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    
+    // Find the button to activate based on mode or use targetButton
+    let buttonToActivate = targetButton;
+    if (!buttonToActivate) {
+      const buttons = document.querySelectorAll('.viz-button');
+      buttons.forEach(btn => {
+        if ((mode === 'timeline' && btn.textContent.includes('タイムライン')) ||
+            (mode === 'phrases' && btn.textContent.includes('フレーズ')) ||
+            (mode === 'comparison' && btn.textContent.includes('ビフォー'))) {
+          buttonToActivate = btn;
+        }
+      });
+    }
+    
+    if (buttonToActivate) {
+      buttonToActivate.classList.add('active');
+    }
+    
+    // Render the appropriate visualization
+    switch(mode) {
+      case 'timeline':
+        this.renderTimelineVisualization();
+        break;
+      case 'phrases':
+        this.renderPhraseVisualization();
+        break;
+      case 'comparison':
+        this.renderComparisonVisualization();
+        break;
+    }
+  }
+
+  renderTimelineVisualization() {
+    const canvas = document.getElementById('visualizationCanvas');
+    if (!canvas) return;
+    
+    const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
+    const phrases = this.lastAnalysis.tracks[0].phrasing;
+    
+    canvas.innerHTML = `
+      <div class="timeline-container">
+        <h4>MIDIタイムライン表示</h4>
+        <div class="timeline-track">
+          ${this.renderNoteTimeline(originalNotes, phrases)}
+        </div>
+        <div class="timeline-ruler">
+          ${this.renderTimeRuler(originalNotes)}
+        </div>
+      </div>
+    `;
+  }
+
+  renderPhraseVisualization() {
+    const canvas = document.getElementById('visualizationCanvas');
+    if (!canvas) return;
+    
+    const phrases = this.lastAnalysis.tracks[0].phrasing;
+    const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
+    
+    canvas.innerHTML = `
+      <div class="phrase-container">
+        <h4>フレーズ構造表示</h4>
+        <div class="phrase-visualization">
+          ${this.renderPhraseStructure(phrases, originalNotes)}
+        </div>
+        <div class="phrase-info">
+          <p>検出されたフレーズ数: <strong>${phrases.length}</strong></p>
+          <p>平均フレーズ長: <strong>${this.calculateAveragePhraseLength(phrases).toFixed(1)}秒</strong></p>
+        </div>
+      </div>
+    `;
+  }
+
+  renderComparisonVisualization() {
+    const canvas = document.getElementById('visualizationCanvas');
+    if (!canvas) return;
+    
+    const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
+    const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
+    
+    canvas.innerHTML = `
+      <div class="comparison-container">
+        <h4>ビフォー・アフター比較</h4>
+        <div class="comparison-tracks">
+          <div class="comparison-track original-track">
+            <h5>オリジナル</h5>
+            <div class="notes-container">
+              ${this.renderNotesComparison(originalNotes, 'original')}
+            </div>
+          </div>
+          <div class="comparison-track humanized-track">
+            <h5>ヒューマナイズ後</h5>
+            <div class="notes-container">
+              ${this.renderNotesComparison(humanizedNotes, 'humanized')}
+            </div>
+          </div>
+        </div>
+        <div class="comparison-stats">
+          ${this.renderComparisonStats(originalNotes, humanizedNotes)}
+        </div>
+      </div>
+    `;
+  }
+
+  extractNotesFromMIDI(midiData) {
+    const notes = [];
+    if (!midiData || !midiData.tracks || midiData.tracks.length === 0) return notes;
+    
+    const track = midiData.tracks[0]; // Use first track
+    const activeNotes = {};
+    
+    track.forEach(event => {
+      if (this.isNoteOn(event)) {
+        activeNotes[event.data1] = {
+          pitch: event.data1,
+          velocity: event.data2,
+          startTime: event.time,
+          endTime: null
+        };
+      } else if (this.isNoteOff(event)) {
+        if (activeNotes[event.data1]) {
+          activeNotes[event.data1].endTime = event.time;
+          notes.push({...activeNotes[event.data1]});
+          delete activeNotes[event.data1];
+        }
+      }
+    });
+    
+    // Handle any remaining active notes
+    Object.values(activeNotes).forEach(note => {
+      note.endTime = note.startTime + 480; // Default duration
+      notes.push(note);
+    });
+    
+    return notes.sort((a, b) => a.startTime - b.startTime);
+  }
+
+  renderNoteTimeline(notes, phrases) {
+    if (notes.length === 0) return '<p>ノートが見つかりません</p>';
+    
+    const maxTime = Math.max(...notes.map(n => n.endTime));
+    const minPitch = Math.min(...notes.map(n => n.pitch));
+    const maxPitch = Math.max(...notes.map(n => n.pitch));
+    const pitchRange = maxPitch - minPitch;
+    
+    let html = '<div class="timeline-notes">';
+    
+    // Render notes
+    notes.forEach((note, index) => {
+      const left = (note.startTime / maxTime) * 100;
+      const width = ((note.endTime - note.startTime) / maxTime) * 100;
+      const top = ((maxPitch - note.pitch) / Math.max(1, pitchRange)) * 100;
+      const intensity = note.velocity / 127;
+      
+      html += `
+        <div class="timeline-note" 
+             style="left: ${left}%; width: ${width}%; top: ${top}%; opacity: ${0.3 + intensity * 0.7}"
+             title="音程: ${note.pitch}, 音量: ${note.velocity}, 開始: ${note.startTime}">
+        </div>
+      `;
+    });
+    
+    // Render phrase boundaries
+    phrases.forEach((phrase, index) => {
+      const startPos = (phrase.start / maxTime) * 100;
+      const endPos = (phrase.end / maxTime) * 100;
+      
+      html += `
+        <div class="phrase-boundary start" 
+             style="left: ${startPos}%"
+             title="フレーズ ${index + 1} 開始">
+        </div>
+        <div class="phrase-boundary end" 
+             style="left: ${endPos}%"
+             title="フレーズ ${index + 1} 終了">
+        </div>
+        <div class="phrase-span" 
+             style="left: ${startPos}%; width: ${endPos - startPos}%"
+             title="フレーズ ${index + 1}">
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+    return html;
+  }
+
+  renderTimeRuler(notes) {
+    if (notes.length === 0) return '';
+    
+    const maxTime = Math.max(...notes.map(n => n.endTime));
+    const secondsTotal = maxTime / 480; // Convert MIDI ticks to approximate seconds
+    const intervals = Math.min(10, Math.max(4, Math.floor(secondsTotal)));
+    
+    let html = '<div class="time-ruler">';
+    for (let i = 0; i <= intervals; i++) {
+      const percent = (i / intervals) * 100;
+      const timeLabel = ((secondsTotal * i) / intervals).toFixed(1);
+      html += `
+        <div class="time-marker" style="left: ${percent}%">
+          <div class="time-label">${timeLabel}s</div>
+        </div>
+      `;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  renderPhraseStructure(phrases, notes) {
+    if (phrases.length === 0) return '<p>フレーズが検出されませんでした</p>';
+    
+    const maxTime = Math.max(...notes.map(n => n.endTime));
+    
+    let html = '<div class="phrase-blocks">';
+    
+    phrases.forEach((phrase, index) => {
+      const startPercent = (phrase.start / maxTime) * 100;
+      const endPercent = (phrase.end / maxTime) * 100;
+      const width = endPercent - startPercent;
+      const duration = ((phrase.end - phrase.start) / 480).toFixed(1);
+      const noteCount = phrase.notes ? phrase.notes.length : 0;
+      
+      html += `
+        <div class="phrase-block" 
+             style="left: ${startPercent}%; width: ${width}%"
+             title="フレーズ ${index + 1}: ${duration}秒, ${noteCount}音">
+          <div class="phrase-label">フレーズ ${index + 1}</div>
+          <div class="phrase-details">
+            <span class="phrase-duration">${duration}s</span>
+            <span class="phrase-notes">${noteCount}音</span>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+    return html;
+  }
+
+  renderNotesComparison(notes, type) {
+    if (notes.length === 0) return '<p>ノートが見つかりません</p>';
+    
+    const maxTime = Math.max(...notes.map(n => n.endTime));
+    const minPitch = Math.min(...notes.map(n => n.pitch));
+    const maxPitch = Math.max(...notes.map(n => n.pitch));
+    const pitchRange = maxPitch - minPitch;
+    
+    let html = '<div class="comparison-notes">';
+    
+    notes.slice(0, 50).forEach((note, index) => { // Limit to first 50 notes for performance
+      const left = (note.startTime / maxTime) * 100;
+      const width = ((note.endTime - note.startTime) / maxTime) * 100;
+      const top = ((maxPitch - note.pitch) / Math.max(1, pitchRange)) * 100;
+      const height = Math.max(2, 100 / Math.max(1, pitchRange));
+      
+      html += `
+        <div class="comparison-note ${type}" 
+             style="left: ${left}%; width: ${width}%; top: ${top}%; height: ${height}%"
+             title="音程: ${note.pitch}, 音量: ${note.velocity}">
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+    return html;
+  }
+
+  renderComparisonStats(originalNotes, humanizedNotes) {
+    const originalAvgVelocity = originalNotes.reduce((sum, n) => sum + n.velocity, 0) / originalNotes.length;
+    const humanizedAvgVelocity = humanizedNotes.reduce((sum, n) => sum + n.velocity, 0) / humanizedNotes.length;
+    
+    const originalAvgDuration = originalNotes.reduce((sum, n) => sum + (n.endTime - n.startTime), 0) / originalNotes.length;
+    const humanizedAvgDuration = humanizedNotes.reduce((sum, n) => sum + (n.endTime - n.startTime), 0) / humanizedNotes.length;
+    
+    return `
+      <div class="stats-comparison">
+        <h5>統計比較</h5>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <label>平均音量</label>
+            <div class="stat-values">
+              <span class="original-stat">${originalAvgVelocity.toFixed(1)}</span>
+              <span class="arrow">→</span>
+              <span class="humanized-stat">${humanizedAvgVelocity.toFixed(1)}</span>
+            </div>
+          </div>
+          <div class="stat-item">
+            <label>平均音長</label>
+            <div class="stat-values">
+              <span class="original-stat">${(originalAvgDuration/480).toFixed(2)}s</span>
+              <span class="arrow">→</span>
+              <span class="humanized-stat">${(humanizedAvgDuration/480).toFixed(2)}s</span>
+            </div>
+          </div>
+          <div class="stat-item">
+            <label>ノート数</label>
+            <div class="stat-values">
+              <span class="original-stat">${originalNotes.length}</span>
+              <span class="arrow">→</span>
+              <span class="humanized-stat">${humanizedNotes.length}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  calculateAveragePhraseLength(phrases) {
+    if (phrases.length === 0) return 0;
+    const totalDuration = phrases.reduce((sum, phrase) => sum + (phrase.end - phrase.start), 0);
+    return (totalDuration / phrases.length) / 480; // Convert to seconds
   }
 }
 
