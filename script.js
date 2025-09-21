@@ -1173,8 +1173,8 @@ class MIDIHumanizer {
     
     // Add a toggle for detailed technical analysis
     html += `<div class="analysis-section">`;
-    html += `<h4>📊 詳細分析データ <button class="toggle-btn" onclick="this.nextElementSibling.classList.toggle('hidden')">表示/非表示</button></h4>`;
-    html += `<div class="detailed-analysis hidden">`;
+    html += `<h4>📊 詳細分析データ <button class="toggle-btn" onclick="document.getElementById('detailed-analysis').classList.toggle('hidden')">表示/非表示</button></h4>`;
+    html += `<div id="detailed-analysis" class="detailed-analysis hidden">`;
     
     // Process each track's analysis with better explanations
     analysis.tracks.forEach((trackAnalysis, trackIndex) => {
