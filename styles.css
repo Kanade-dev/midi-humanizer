@@ -476,6 +476,36 @@ button:disabled {
   100% { transform: rotate(360deg); }
 }
 
+/* Integrated Section Styles */
+.integrated-section {
+  background: white;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  margin-bottom: 2rem;
+  overflow: hidden;
+}
+
+.playback-subsection {
+  background: #f8f9fa;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.analysis-subsection {
+  padding: 1.5rem;
+}
+
+.analysis-subsection h3 {
+  margin-top: 0;
+  color: var(--primary-color);
+  border-bottom: 2px solid var(--secondary-color);
+  padding-bottom: 0.5rem;
+}
+
+.analysis-content {
+  margin-top: 1rem;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .container {
