@@ -1087,15 +1087,16 @@ class MIDIHumanizer {
     const markers = this.extractPhraseMarkers(track);
     const boundaries = markers.phraseBoundaries.map(m => m.time).sort((a, b) => a - b);
     
-    // Filter out musical notes (exclude the marker notes C6 and B5)
-    const musicalNotes = notes.filter(n => n.pitch !== 96 && n.pitch !== 95);
-    const musicalNoteEvents = noteEvents.filter(e => e.data1 !== 96 && e.data1 !== 95);
+    // Filter out musical notes (exclude the marker notes C6, A5, and B5)
+    const musicalNotes = notes.filter(n => n.pitch !== 96 && n.pitch !== 93 && n.pitch !== 95);
+    const musicalNoteEvents = noteEvents.filter(e => e.data1 !== 96 && e.data1 !== 93 && e.data1 !== 95);
     
     console.log('Training data phrase detection:', {
       totalNotes: notes.length,
       musicalNotes: musicalNotes.length,
       markerNotes: notes.length - musicalNotes.length,
       phraseBoundaries: boundaries.length,
+      strongNuanceMarkers: markers.strongNuanceMarkers.length,
       nuanceMarkers: markers.nuanceMarkers.length
     });
     
@@ -1121,23 +1122,29 @@ class MIDIHumanizer {
     if (!this.learnedPatterns) {
       this.learnedPatterns = {
         phraseBoundaryFeatures: [],
+        strongNuanceFeatures: [],
         nuanceFeatures: []
       };
     }
     
     // Store the features for learning
     this.learnedPatterns.phraseBoundaryFeatures.push(...trainingAnalysis.phraseFeatures);
+    this.learnedPatterns.strongNuanceFeatures.push(...(trainingAnalysis.strongNuanceFeatures || []));
     this.learnedPatterns.nuanceFeatures.push(...trainingAnalysis.nuanceFeatures);
     
     // Analyze patterns in the learned features
     const boundaryFeatures = this.learnedPatterns.phraseBoundaryFeatures;
+    const strongNuanceFeatures = this.learnedPatterns.strongNuanceFeatures;
+    
     if (boundaryFeatures.length > 0) {
       const avgRestDuration = boundaryFeatures.reduce((sum, f) => sum + f.restDuration, 0) / boundaryFeatures.length;
       const avgPitchChange = boundaryFeatures.reduce((sum, f) => sum + f.pitchChange, 0) / boundaryFeatures.length;
       const avgVelocityChange = boundaryFeatures.reduce((sum, f) => sum + f.velocityChange, 0) / boundaryFeatures.length;
       
       console.log('Learned phrase patterns:', {
-        samplesCount: boundaryFeatures.length,
+        phraseBoundaryCount: boundaryFeatures.length,
+        strongNuanceCount: strongNuanceFeatures.length,
+        nuanceCount: this.learnedPatterns.nuanceFeatures.length,
         avgRestDuration: Math.round(avgRestDuration),
         avgPitchChange: avgPitchChange.toFixed(1),
         avgVelocityChange: avgVelocityChange.toFixed(1),
@@ -1472,10 +1479,109 @@ class MIDIHumanizer {
     // Sort change scores by time
     changeScores.sort((a, b) => a.time - b.time);
     
+    // Also apply strong nuance patterns if available
+    this.applyStrongNuancePatterns(changeScores, notes, grid);
+    
     console.log('Enhanced with learned patterns:', {
       totalChangeScores: changeScores.length,
-      learnedPatternBoosts: changeScores.filter(cs => cs.features.learnedPatternBoost).length
+      learnedPatternBoosts: changeScores.filter(cs => cs.features.learnedPatternBoost).length,
+      strongNuanceBoosts: changeScores.filter(cs => cs.features.strongNuanceBoost).length
     });
+  }
+
+  // Apply strong nuance patterns (A5 markers) with moderate weighting
+  applyStrongNuancePatterns(changeScores, notes, grid) {
+    if (!this.learnedPatterns || !this.learnedPatterns.strongNuanceFeatures || this.learnedPatterns.strongNuanceFeatures.length === 0) {
+      return;
+    }
+    
+    const strongNuanceFeatures = this.learnedPatterns.strongNuanceFeatures;
+    
+    // Calculate average characteristics of strong nuance markers
+    const avgRestDuration = strongNuanceFeatures.reduce((sum, f) => sum + f.restDuration, 0) / strongNuanceFeatures.length;
+    const avgPitchChange = strongNuanceFeatures.reduce((sum, f) => sum + f.pitchChange, 0) / strongNuanceFeatures.length;
+    const avgVelocityChange = strongNuanceFeatures.reduce((sum, f) => sum + f.velocityChange, 0) / strongNuanceFeatures.length;
+    const avgDensityChange = strongNuanceFeatures.reduce((sum, f) => sum + f.densityChange, 0) / strongNuanceFeatures.length;
+    
+    console.log('Applying strong nuance patterns:', {
+      strongNuanceSamples: strongNuanceFeatures.length,
+      avgRestDuration: Math.round(avgRestDuration),
+      avgPitchChange: avgPitchChange.toFixed(1),
+      avgVelocityChange: avgVelocityChange.toFixed(1),
+      avgDensityChange: avgDensityChange.toFixed(1)
+    });
+    
+    const windowSize = 960; // 1 beat window for context analysis
+    
+    for (let i = 0; i < notes.length - 1; i++) {
+      const currentNote = notes[i];
+      const nextNote = notes[i + 1];
+      const candidateTime = nextNote.startTime;
+      
+      // Analyze context around this candidate boundary
+      const context = this.analyzeBoundaryContext(candidateTime, notes, windowSize);
+      
+      // Calculate similarity to strong nuance patterns
+      let similarity = 0;
+      let matchCount = 0;
+      
+      // Rest duration similarity
+      if (context.restDuration > 0 && avgRestDuration > 0) {
+        const restSimilarity = 1 - Math.abs(context.restDuration - avgRestDuration) / Math.max(context.restDuration, avgRestDuration);
+        similarity += restSimilarity * 0.3;
+        matchCount++;
+      }
+      
+      // Pitch change similarity
+      if (context.pitchChange > 0 && avgPitchChange > 0) {
+        const pitchSimilarity = 1 - Math.abs(context.pitchChange - avgPitchChange) / Math.max(context.pitchChange, avgPitchChange, 12);
+        similarity += pitchSimilarity * 0.3;
+        matchCount++;
+      }
+      
+      // Velocity change similarity
+      if (context.velocityChange > 0 && avgVelocityChange > 0) {
+        const velocitySimilarity = 1 - Math.abs(context.velocityChange - avgVelocityChange) / Math.max(context.velocityChange, avgVelocityChange, 64);
+        similarity += velocitySimilarity * 0.2;
+        matchCount++;
+      }
+      
+      // Density change similarity
+      if (context.densityChange > 0 && avgDensityChange > 0) {
+        const densitySimilarity = 1 - Math.abs(context.densityChange - avgDensityChange) / Math.max(context.densityChange, avgDensityChange, 10);
+        similarity += densitySimilarity * 0.2;
+        matchCount++;
+      }
+      
+      // Apply moderate boost for strong nuance patterns (weaker than phrase boundaries)
+      if (matchCount > 0 && similarity > 0.4) {
+        const boost = similarity * 0.5; // Moderate boost (weaker than 0.8 for phrase boundaries)
+        
+        // Find existing change score for this time or add new one
+        let existingScore = changeScores.find(cs => Math.abs(cs.time - candidateTime) < grid.ticksPerBeat / 4);
+        
+        if (existingScore) {
+          existingScore.score += boost;
+          existingScore.features.strongNuanceBoost = boost;
+          existingScore.features.strongNuanceSimilarity = similarity;
+        } else {
+          changeScores.push({
+            time: candidateTime,
+            score: boost,
+            features: {
+              type: 'strong-nuance-pattern',
+              strongNuanceBoost: boost,
+              strongNuanceSimilarity: similarity,
+              matchCount: matchCount,
+              ...context
+            }
+          });
+        }
+      }
+    }
+    
+    // Sort change scores by time
+    changeScores.sort((a, b) => a.time - b.time);
   }
 
   applyStructuralWeighting(changeScores, grid) {
@@ -2058,11 +2164,12 @@ class MIDIHumanizer {
     return boundaries;
   }
 
-  // Analyze phrase markers from training MIDI files (C6 = 96, B5 = 95)
+  // Analyze phrase markers from training MIDI files (C6 = 96, A5 = 93, B5 = 95)
   extractPhraseMarkers(track) {
     const markers = {
-      phraseBoundaries: [], // C6 notes (pitch 96)
-      nuanceMarkers: []     // B5 notes (pitch 95)
+      phraseBoundaries: [], // C6 notes (pitch 96) - strongest phrase boundaries
+      strongNuanceMarkers: [], // A5 notes (pitch 93) - strong groove/rhythm peaks
+      nuanceMarkers: []     // B5 notes (pitch 95) - subtle nuance variations
     };
     
     const noteEvents = track.filter(event => this.isNoteOn(event));
@@ -2072,21 +2179,32 @@ class MIDIHumanizer {
         markers.phraseBoundaries.push({
           time: event.time,
           pitch: event.data1,
-          velocity: event.data2
+          velocity: event.data2,
+          type: 'phrase'
         });
-      } else if (event.data1 === 95) { // B5 - nuance marker
+      } else if (event.data1 === 93) { // A5 - strong groove/rhythm peak
+        markers.strongNuanceMarkers.push({
+          time: event.time,
+          pitch: event.data1,
+          velocity: event.data2,
+          type: 'strongNuance'
+        });
+      } else if (event.data1 === 95) { // B5 - subtle nuance marker
         markers.nuanceMarkers.push({
           time: event.time,
           pitch: event.data1,
-          velocity: event.data2
+          velocity: event.data2,
+          type: 'nuance'
         });
       }
     });
     
     console.log('Phrase markers extracted:', {
       phraseBoundaries: markers.phraseBoundaries.length,
+      strongNuanceMarkers: markers.strongNuanceMarkers.length,
       nuanceMarkers: markers.nuanceMarkers.length,
       boundaries: markers.phraseBoundaries.map(m => m.time),
+      strongNuances: markers.strongNuanceMarkers.map(m => m.time),
       nuances: markers.nuanceMarkers.map(m => m.time)
     });
     
@@ -2097,8 +2215,9 @@ class MIDIHumanizer {
   analyzeTrainingPhrases(track, notes) {
     const markers = this.extractPhraseMarkers(track);
     const analysis = {
-      markerCount: markers.phraseBoundaries.length + markers.nuanceMarkers.length,
+      markerCount: markers.phraseBoundaries.length + markers.strongNuanceMarkers.length + markers.nuanceMarkers.length,
       phraseFeatures: [],
+      strongNuanceFeatures: [],
       nuanceFeatures: []
     };
     
@@ -2116,7 +2235,17 @@ class MIDIHumanizer {
       });
     });
     
-    // Analyze musical features around each nuance marker
+    // Analyze musical features around each strong nuance marker (A5)
+    markers.strongNuanceMarkers.forEach(strongNuance => {
+      const features = this.analyzeBoundaryContext(strongNuance.time, notes);
+      analysis.strongNuanceFeatures.push({
+        time: strongNuance.time,
+        ...features,
+        type: 'strongNuance'
+      });
+    });
+    
+    // Analyze musical features around each nuance marker (B5)
     markers.nuanceMarkers.forEach(nuance => {
       const features = this.analyzeBoundaryContext(nuance.time, notes);
       analysis.nuanceFeatures.push({
@@ -2128,6 +2257,7 @@ class MIDIHumanizer {
     
     console.log('Training phrase analysis:', {
       phraseBoundaries: analysis.phraseFeatures.length,
+      strongNuanceMarkers: analysis.strongNuanceFeatures.length,
       nuanceMarkers: analysis.nuanceFeatures.length,
       avgPhraseDuration: this.calculateAveragePhraseDuration(markers.phraseBoundaries),
       features: analysis.phraseFeatures.slice(0, 3) // Show first few features
