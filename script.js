@@ -10,6 +10,7 @@ class MIDIHumanizer {
     // Audio playback properties
     this.audioContext = null;
     this.currentPlayback = null;
+    this.activeAudioNodes = []; // Track active audio nodes for proper cleanup
     this.isPlaying = false;
     this.isPlayingOriginal = false;
     this.isPlayingHumanized = false;
@@ -63,6 +64,15 @@ class MIDIHumanizer {
     const harmonic3Gain = this.audioContext.createGain();
     const masterGain = this.audioContext.createGain();
     
+    // Track all nodes for cleanup
+    const nodes = {
+      oscillators: [fundamental, harmonic2, harmonic3], 
+      gains: [fundamentalGain, harmonic2Gain, harmonic3Gain, masterGain],
+      startTime: startTime,
+      endTime: startTime + duration / 1000 + 0.1
+    };
+    this.activeAudioNodes.push(nodes);
+    
     // Configure oscillators for piano-like timbre
     fundamental.type = 'sine';
     harmonic2.type = 'triangle';
@@ -108,10 +118,7 @@ class MIDIHumanizer {
     harmonic2.stop(startTime + duration / 1000 + 0.1);
     harmonic3.stop(startTime + duration / 1000 + 0.1);
     
-    return { 
-      oscillators: [fundamental, harmonic2, harmonic3], 
-      gains: [fundamentalGain, harmonic2Gain, harmonic3Gain, masterGain] 
-    };
+    return nodes;
   }
 
   // Convert MIDI note number to frequency
@@ -125,7 +132,48 @@ class MIDIHumanizer {
       this.currentPlayback.forEach(timeout => clearTimeout(timeout));
       this.currentPlayback = [];
     }
+    
+    // Stop all active audio nodes
+    const currentTime = this.audioContext ? this.audioContext.currentTime : 0;
+    this.activeAudioNodes.forEach(nodeGroup => {
+      try {
+        // Stop oscillators immediately if they're still running
+        nodeGroup.oscillators.forEach(osc => {
+          if (osc.playbackState !== osc.FINISHED_STATE) {
+            osc.stop(currentTime);
+          }
+        });
+        
+        // Fade out gain nodes quickly to prevent clicks
+        nodeGroup.gains.forEach(gain => {
+          if (gain.gain) {
+            gain.gain.cancelScheduledValues(currentTime);
+            gain.gain.setValueAtTime(gain.gain.value, currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, currentTime + 0.01);
+          }
+        });
+        
+        // Disconnect all nodes after a short delay
+        setTimeout(() => {
+          nodeGroup.oscillators.forEach(osc => {
+            try { osc.disconnect(); } catch (e) {}
+          });
+          nodeGroup.gains.forEach(gain => {
+            try { gain.disconnect(); } catch (e) {}
+          });
+        }, 20);
+        
+      } catch (error) {
+        console.warn('Error stopping audio node:', error);
+      }
+    });
+    
+    // Clear the active nodes array
+    this.activeAudioNodes = [];
+    
     this.isPlaying = false;
+    this.isPlayingOriginal = false;
+    this.isPlayingHumanized = false;
     this.stopProgressTracking();
     this.updatePlaybackButtons();
   }
@@ -147,13 +195,6 @@ class MIDIHumanizer {
       this.progressInterval = null;
     }
     this.updateVisualizationProgress(0); // Reset progress
-  }
-
-  updateVisualizationProgress(progress) {
-    // Update progress in visualization instead of progress bar
-    if (this.currentVisualizationMode) {
-      this.updateVisualizationProgress(progress);
-    }
   }
 
   updateVisualizationProgress(progress) {
@@ -228,6 +269,7 @@ class MIDIHumanizer {
 
     this.isPlaying = true;
     this.currentPlayback = [];
+    this.activeAudioNodes = []; // Clear any previous audio nodes
     this.playbackStartTime = this.audioContext.currentTime;
     this.updatePlaybackButtons();
 
@@ -1095,19 +1137,66 @@ class MIDIHumanizer {
       return [];
     }
     
-    const windowSize = Math.max(grid.ticksPerBeat / 4, 12); // Very small windows for maximum sensitivity
+    // Use more adaptive window sizing based on note density
+    const avgNotesPerBeat = notes.length / (grid.totalTicks / grid.ticksPerBeat);
+    const windowSize = Math.max(grid.ticksPerBeat / 8, Math.min(grid.ticksPerBeat, grid.totalTicks / 8));
     const changeScores = [];
     
     console.log('Window analysis:', {
       windowSize,
       totalTicks: grid.totalTicks,
       ticksPerBeat: grid.ticksPerBeat,
+      avgNotesPerBeat,
       noteSpan: `${notes[0]?.time} to ${notes[notes.length - 1]?.endTime}`
     });
     
-    for (let time = 0; time < grid.totalTicks; time += windowSize) {
-      const windowNotes = notes.filter(n => n.time >= time && n.time < time + windowSize);
-      const nextWindowNotes = notes.filter(n => n.time >= time + windowSize && n.time < time + 2 * windowSize);
+    // Analyze note-to-note changes as well as windowed changes
+    for (let i = 1; i < notes.length; i++) {
+      const prev = notes[i - 1];
+      const current = notes[i];
+      
+      // Calculate note-level changes
+      const timeDiff = current.time - prev.endTime; // Gap between notes
+      const pitchDiff = Math.abs(current.pitch - prev.pitch);
+      const velocityDiff = Math.abs(current.velocity - prev.velocity);
+      
+      // Score based on significant changes
+      let noteChangeScore = 0;
+      
+      // Large time gaps suggest phrase boundaries
+      if (timeDiff > grid.ticksPerBeat / 4) {
+        noteChangeScore += Math.min(1, timeDiff / grid.ticksPerBeat) * 0.8;
+      }
+      
+      // Large pitch jumps suggest phrase boundaries
+      if (pitchDiff > 4) { // More than major third
+        noteChangeScore += Math.min(1, pitchDiff / 12) * 0.6;
+      }
+      
+      // Significant velocity changes
+      if (velocityDiff > 20) {
+        noteChangeScore += Math.min(1, velocityDiff / 64) * 0.4;
+      }
+      
+      // Register significant changes
+      if (noteChangeScore > 0.3) {
+        changeScores.push({
+          time: current.startTime,
+          score: noteChangeScore,
+          features: { 
+            type: 'note-level',
+            timeDiff, 
+            pitchDiff, 
+            velocityDiff 
+          }
+        });
+      }
+    }
+    
+    // Also do windowed analysis for broader patterns
+    for (let time = windowSize; time < grid.totalTicks - windowSize; time += windowSize / 2) {
+      const windowNotes = notes.filter(n => n.startTime >= time - windowSize/2 && n.startTime < time + windowSize/2);
+      const nextWindowNotes = notes.filter(n => n.startTime >= time + windowSize/2 && n.startTime < time + windowSize * 1.5);
       
       if (windowNotes.length === 0 && nextWindowNotes.length === 0) continue;
       
@@ -1118,20 +1207,24 @@ class MIDIHumanizer {
       // Calculate change magnitude
       const changeScore = this.calculateFeatureChangeMagnitude(currentFeatures, nextFeatures);
       
-      // Add artificial change score for rhythmic patterns
+      // Add rhythmic pattern analysis
       const rhythmScore = this.calculateRhythmicChange(windowNotes, nextWindowNotes);
       const combinedScore = Math.max(changeScore, rhythmScore * 0.5);
       
-      if (combinedScore > 0) {
+      if (combinedScore > 0.2) { // Lower threshold for windowed analysis
         changeScores.push({
-          time: time + windowSize, // Boundary is at end of current window
+          time: time,
           score: combinedScore,
-          features: { current: currentFeatures, next: nextFeatures }
+          features: { 
+            type: 'windowed', 
+            current: currentFeatures, 
+            next: nextFeatures 
+          }
         });
       }
     }
     
-    console.log('Change scores generated:', changeScores.length, changeScores);
+    console.log('Change scores generated:', changeScores.length, changeScores.map(cs => `${cs.time}:${cs.score.toFixed(2)}`));
     return changeScores;
   }
 
@@ -1225,48 +1318,96 @@ class MIDIHumanizer {
   }
 
   detectPhraseBoundaryPeaks(weightedScores, grid) {
-    if (weightedScores.length < 2) {
-      console.log('Too few weighted scores, using fallback strategy');
+    if (weightedScores.length < 1) {
+      console.log('No weighted scores available, using fallback strategy');
       return this.createFallbackBoundaries(grid);
     }
     
     const peaks = [];
-    const minPhraseLength = Math.min(grid.ticksPerMeasure * 0.25, grid.ticksPerBeat); // More sensitive minimum distance
+    const minPhraseLength = Math.max(grid.ticksPerBeat / 2, 24); // Smaller minimum distance
     
-    // For very short pieces, use a simpler approach based on time intervals
-    if (weightedScores.length < 5) {
-      console.log('Short piece detected, using simple segmentation');
-      return this.createFallbackBoundaries(grid);
-    }
+    // Sort scores by weighted value to find most significant changes
+    const sortedScores = [...weightedScores].sort((a, b) => b.weightedScore - a.weightedScore);
     
-    // Lower threshold significantly for small MIDI files
-    const dynamicThreshold = Math.max(0.02, 0.08 * Math.min(1, weightedScores.length / 10));
+    // Use adaptive threshold based on the score distribution
+    const maxScore = sortedScores[0]?.weightedScore || 0;
+    const avgScore = weightedScores.reduce((sum, s) => sum + s.weightedScore, 0) / weightedScores.length;
+    const dynamicThreshold = Math.max(0.02, Math.min(maxScore * 0.3, avgScore * 1.5));
     
-    // Find local maxima in weighted scores
-    for (let i = 1; i < weightedScores.length - 1; i++) {
+    console.log('Peak detection parameters:', {
+      totalScores: weightedScores.length,
+      maxScore: maxScore.toFixed(3),
+      avgScore: avgScore.toFixed(3),
+      threshold: dynamicThreshold.toFixed(3),
+      minPhraseLength
+    });
+    
+    // Find all significant peaks above threshold
+    const candidatePeaks = [];
+    for (let i = 0; i < weightedScores.length; i++) {
       const current = weightedScores[i];
-      const prev = weightedScores[i - 1];
-      const next = weightedScores[i + 1];
       
-      // Check if this is a local maximum with significant score
-      if (current.weightedScore > prev.weightedScore && 
-          current.weightedScore > next.weightedScore &&
-          current.weightedScore > dynamicThreshold) {
+      // Check if above threshold
+      if (current.weightedScore >= dynamicThreshold) {
+        // Check if local maximum (or allow boundary values)
+        const isLocalMax = (i === 0 || current.weightedScore >= weightedScores[i - 1].weightedScore) &&
+                          (i === weightedScores.length - 1 || current.weightedScore >= weightedScores[i + 1].weightedScore);
         
-        // Ensure minimum distance from previous peak
-        if (peaks.length === 0 || current.time - peaks[peaks.length - 1] >= minPhraseLength) {
-          peaks.push(current.time);
+        if (isLocalMax) {
+          candidatePeaks.push(current);
         }
       }
     }
     
-    // If no peaks found, create artificial boundaries for reasonable phrase division
-    if (peaks.length === 0) {
-      console.log('No peaks found, using fallback boundaries');
-      return this.createFallbackBoundaries(grid);
+    // Sort candidate peaks by time and select based on distance
+    candidatePeaks.sort((a, b) => a.time - b.time);
+    
+    for (const peak of candidatePeaks) {
+      // Ensure minimum distance from previous peak
+      if (peaks.length === 0 || peak.time - peaks[peaks.length - 1] >= minPhraseLength) {
+        peaks.push(peak.time);
+      }
     }
     
-    // No limit on phrase boundaries
+    console.log('Detected peaks:', peaks.length, peaks);
+    
+    // Only fall back if we get too few peaks for the music length
+    const expectedMinPhrases = Math.max(2, Math.min(6, Math.ceil(grid.totalTicks / (grid.ticksPerMeasure * 2))));
+    if (peaks.length < expectedMinPhrases - 1) {
+      console.log(`Too few peaks (${peaks.length}) for expected ${expectedMinPhrases} phrases, using hybrid approach`);
+      return this.createHybridBoundaries(peaks, grid);
+    }
+    
+    return peaks;
+  }
+
+  createHybridBoundaries(detectedPeaks, grid) {
+    const totalTicks = grid.totalTicks;
+    const peaks = [...detectedPeaks]; // Keep detected peaks
+    
+    // Add strategic fallback boundaries if needed
+    const expectedPhrases = Math.max(2, Math.min(6, Math.ceil(totalTicks / (grid.ticksPerMeasure * 2))));
+    const neededBoundaries = Math.max(0, expectedPhrases - 1 - peaks.length);
+    
+    if (neededBoundaries > 0) {
+      // Fill gaps with evenly spaced boundaries
+      const segments = expectedPhrases;
+      const segmentLength = totalTicks / segments;
+      
+      for (let i = 1; i < segments; i++) {
+        const candidateTime = i * segmentLength;
+        
+        // Only add if not too close to existing peaks
+        const tooClose = peaks.some(peak => Math.abs(peak - candidateTime) < grid.ticksPerBeat);
+        if (!tooClose) {
+          peaks.push(candidateTime);
+        }
+      }
+    }
+    
+    // Sort and return
+    peaks.sort((a, b) => a - b);
+    console.log('Hybrid boundaries created:', peaks);
     return peaks;
   }
 
