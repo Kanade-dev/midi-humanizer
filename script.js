@@ -1030,7 +1030,10 @@ class MIDIHumanizer {
       tempo: grid.tempo,
       rawBoundaries: changeScores.length,
       weightedBoundaries: boundaries.length,
-      finalPhrases: boundaries.length + 1
+      finalPhrases: boundaries.length + 1,
+      totalTicks: grid.totalTicks,
+      firstNote: notes[0]?.time,
+      lastNote: notes[notes.length - 1]?.endTime
     });
     
     return this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
@@ -1074,8 +1077,20 @@ class MIDIHumanizer {
   }
 
   calculateMusicFeatureChanges(notes, grid) {
-    const windowSize = grid.ticksPerBeat; // Analyze in beat-sized windows
+    if (notes.length < 2) {
+      console.log('Not enough notes for change detection');
+      return [];
+    }
+    
+    const windowSize = Math.max(grid.ticksPerBeat / 4, 12); // Very small windows for maximum sensitivity
     const changeScores = [];
+    
+    console.log('Window analysis:', {
+      windowSize,
+      totalTicks: grid.totalTicks,
+      ticksPerBeat: grid.ticksPerBeat,
+      noteSpan: `${notes[0]?.time} to ${notes[notes.length - 1]?.endTime}`
+    });
     
     for (let time = 0; time < grid.totalTicks; time += windowSize) {
       const windowNotes = notes.filter(n => n.time >= time && n.time < time + windowSize);
@@ -1090,14 +1105,44 @@ class MIDIHumanizer {
       // Calculate change magnitude
       const changeScore = this.calculateFeatureChangeMagnitude(currentFeatures, nextFeatures);
       
-      changeScores.push({
-        time: time + windowSize, // Boundary is at end of current window
-        score: changeScore,
-        features: { current: currentFeatures, next: nextFeatures }
-      });
+      // Add artificial change score for rhythmic patterns
+      const rhythmScore = this.calculateRhythmicChange(windowNotes, nextWindowNotes);
+      const combinedScore = Math.max(changeScore, rhythmScore * 0.5);
+      
+      if (combinedScore > 0) {
+        changeScores.push({
+          time: time + windowSize, // Boundary is at end of current window
+          score: combinedScore,
+          features: { current: currentFeatures, next: nextFeatures }
+        });
+      }
     }
     
+    console.log('Change scores generated:', changeScores.length, changeScores);
     return changeScores;
+  }
+
+  calculateRhythmicChange(currentNotes, nextNotes) {
+    if (currentNotes.length === 0 && nextNotes.length === 0) return 0;
+    if (currentNotes.length === 0 || nextNotes.length === 0) return 0.3; // Silence change
+    
+    // Simple rhythmic density change detection
+    const currentDensity = currentNotes.length;
+    const nextDensity = nextNotes.length;
+    const densityChange = Math.abs(currentDensity - nextDensity) / Math.max(currentDensity, nextDensity, 1);
+    
+    // Pitch movement patterns
+    const currentRange = this.getPitchRange(currentNotes);
+    const nextRange = this.getPitchRange(nextNotes);
+    const rangeChange = Math.abs(currentRange - nextRange) / Math.max(currentRange, nextRange, 12);
+    
+    return Math.min(1, densityChange + rangeChange * 0.5);
+  }
+
+  getPitchRange(notes) {
+    if (notes.length === 0) return 0;
+    const pitches = notes.map(n => n.pitch);
+    return Math.max(...pitches) - Math.min(...pitches);
   }
 
   extractMusicFeatures(notes) {
@@ -1167,10 +1212,22 @@ class MIDIHumanizer {
   }
 
   detectPhraseBoundaryPeaks(weightedScores, grid) {
-    if (weightedScores.length < 3) return [];
+    if (weightedScores.length < 2) {
+      console.log('Too few weighted scores, using fallback strategy');
+      return this.createFallbackBoundaries(grid);
+    }
     
     const peaks = [];
-    const minPhraseLength = grid.ticksPerMeasure * 0.5; // Minimum 0.5 measure between phrases for more sensitivity
+    const minPhraseLength = Math.min(grid.ticksPerMeasure * 0.25, grid.ticksPerBeat); // More sensitive minimum distance
+    
+    // For very short pieces, use a simpler approach based on time intervals
+    if (weightedScores.length < 5) {
+      console.log('Short piece detected, using simple segmentation');
+      return this.createFallbackBoundaries(grid);
+    }
+    
+    // Lower threshold significantly for small MIDI files
+    const dynamicThreshold = Math.max(0.02, 0.08 * Math.min(1, weightedScores.length / 10));
     
     // Find local maxima in weighted scores
     for (let i = 1; i < weightedScores.length - 1; i++) {
@@ -1181,7 +1238,7 @@ class MIDIHumanizer {
       // Check if this is a local maximum with significant score
       if (current.weightedScore > prev.weightedScore && 
           current.weightedScore > next.weightedScore &&
-          current.weightedScore > 0.08) { // Lowered threshold for more sensitive phrase detection
+          current.weightedScore > dynamicThreshold) {
         
         // Ensure minimum distance from previous peak
         if (peaks.length === 0 || current.time - peaks[peaks.length - 1] >= minPhraseLength) {
@@ -1190,8 +1247,40 @@ class MIDIHumanizer {
       }
     }
     
-    // Limit to maximum 8 boundaries (9 phrases) for more detailed phrase detection
+    // If no peaks found, create artificial boundaries for reasonable phrase division
+    if (peaks.length === 0) {
+      console.log('No peaks found, using fallback boundaries');
+      return this.createFallbackBoundaries(grid);
+    }
+    
+    // Limit to maximum 8 boundaries (9 phrases)
     return peaks.slice(0, 8);
+  }
+
+  createFallbackBoundaries(grid) {
+    const totalTicks = grid.totalTicks;
+    const peaks = [];
+    
+    // For very short pieces (less than 2 measures), create 2-3 phrases
+    if (totalTicks < grid.ticksPerMeasure * 2) {
+      const numPhrases = Math.max(2, Math.min(3, Math.ceil(totalTicks / (grid.ticksPerBeat * 2))));
+      const segmentLength = totalTicks / numPhrases;
+      
+      for (let i = 1; i < numPhrases; i++) {
+        peaks.push(i * segmentLength);
+      }
+    } else {
+      // For longer pieces, use measure-based segmentation
+      const numPhrases = Math.min(4, Math.max(2, Math.ceil(totalTicks / grid.ticksPerMeasure)));
+      const segmentLength = totalTicks / numPhrases;
+      
+      for (let i = 1; i < numPhrases; i++) {
+        peaks.push(i * segmentLength);
+      }
+    }
+    
+    console.log('Created fallback boundaries:', peaks);
+    return peaks;
   }
   
   extractNotesFromTrack(track) {
@@ -1893,45 +1982,42 @@ class MIDIHumanizer {
 
   addIntegratedSection(container) {
     // Remove existing sections
-    const existingSection = container.querySelector('.integrated-section');
+    const existingSection = container.querySelector('.result');
     if (existingSection) {
       existingSection.remove();
     }
     
     // Create simplified integrated section
     const integratedSection = document.createElement('div');
-    integratedSection.className = 'integrated-section';
+    integratedSection.className = 'result';
     
-    // Simplified interface with essential features only
+    // Lightweight interface focused on essential features
     const simplifiedHtml = `
-      <div class="results-summary">
+      <div class="success-header">
         <h3>ヒューマナイズ完了</h3>
         <p>処理が完了しました。以下で結果をプレビューしてダウンロードできます。</p>
       </div>
       
-      <div class="playback-section">
+      <div class="playback-section section">
         <h4>再生とプレビュー</h4>
         <div class="playback-controls">
           <button class="play-button" onclick="midiHumanizer.playOriginal()">オリジナル再生</button>
           <button class="play-button" onclick="midiHumanizer.playHumanized()">ヒューマナイズ後再生</button>
         </div>
         
-        <!-- Enhanced MIDI Visualizer with playback progress -->
         <div class="midi-visualizer-container">
           <h5>MIDIビジュアライザー</h5>
           <div id="midiVisualization" class="midi-visualization">
-            <!-- Visualization will be populated here -->
+            <div id="visualizationCanvas"></div>
           </div>
           <div class="visualization-controls">
-            <button onclick="midiHumanizer.showVisualization('timeline')" class="viz-button active">タイムライン表示</button>
-            <button onclick="midiHumanizer.showVisualization('phrases')" class="viz-button">フレーズ構造</button>
+            <button onclick="midiHumanizer.showVisualization('timeline', this)" class="viz-button active">タイムライン表示</button>
+            <button onclick="midiHumanizer.showVisualization('phrases', this)" class="viz-button">フレーズ構造</button>
           </div>
         </div>
-        
-        <small>※ 基本的な再生機能です。赤い線が現在の再生位置を示します。</small>
       </div>
       
-      <div class="phrase-analysis-section">
+      <div class="phrase-analysis-section section">
         <h4>フレーズ分析結果</h4>
         <div id="phraseAnalysisResults">
           <!-- Phrase analysis will be inserted here -->
@@ -1945,6 +2031,9 @@ class MIDIHumanizer {
     
     integratedSection.innerHTML = simplifiedHtml;
     container.appendChild(integratedSection);
+    
+    // Initialize with lightweight visualization
+    this.showVisualization('timeline');
     
     // Add phrase analysis results
     this.displaySimplifiedPhraseAnalysis();
@@ -2451,7 +2540,7 @@ class MIDIHumanizer {
   showVisualization(mode, targetButton = null) {
     this.currentVisualizationMode = mode;
     
-    // Update button states
+    // Update button states (lightweight)
     document.querySelectorAll('.viz-button').forEach(btn => {
       btn.classList.remove('active');
     });
@@ -2472,45 +2561,85 @@ class MIDIHumanizer {
       buttonToActivate.classList.add('active');
     }
     
-    // Render the appropriate visualization
+    // Render lightweight visualizations
     switch(mode) {
       case 'timeline':
-        this.renderTimelineVisualization();
+        this.renderLightweightTimeline();
         break;
       case 'phrases':
-        this.renderPhraseVisualization();
+        this.renderLightweightPhrases();
         break;
     }
   }
 
-  renderTimelineVisualization() {
+  renderLightweightTimeline() {
     const canvas = document.getElementById('visualizationCanvas');
     if (!canvas) return;
     
     const originalNotes = this.extractNotesFromMIDI(this.originalMidiData);
     const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
-    const phrases = this.lastAnalysis.tracks[0].phrasing;
-    
-    // Initialize zoom level if not set
-    if (!this.zoomLevel) this.zoomLevel = 5;
     
     canvas.innerHTML = `
-      <div class="timeline-container">
-        <h4>MIDIタイムライン表示（オリジナル vs ヒューマナイズ後）</h4>
-        <div class="timeline-controls">
-          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(-0.5)">ズームアウト</button>
-          <span class="zoom-level">縮尺: ${this.zoomLevel.toFixed(1)}x</span>
-          <button class="zoom-control" onclick="midiHumanizer.adjustZoom(0.5)">ズームイン</button>
-          <button class="zoom-control" onclick="midiHumanizer.resetZoom()">リセット</button>
+      <div class="simple-timeline">
+        <h4>MIDI タイムライン表示</h4>
+        <div class="timeline-info">
+          <div class="timeline-stats">
+            <span>オリジナル: <strong>${originalNotes.length}</strong> ノート</span>
+            <span>ヒューマナイズ後: <strong>${humanizedNotes.length}</strong> ノート</span>
+          </div>
         </div>
-        <div class="timeline-track">
-          ${this.renderOverlaidTimeline(originalNotes, humanizedNotes, phrases)}
-        </div>
-        <div class="timeline-ruler">
-          ${this.renderTimeRuler(originalNotes.concat(humanizedNotes))}
+        <div class="timeline-representation">
+          <div class="timeline-track">
+            <div class="timeline-label">オリジナル</div>
+            <div class="timeline-bar" style="background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%); height: 12px; border-radius: 6px; margin: 0.5rem 0;"></div>
+          </div>
+          <div class="timeline-track">
+            <div class="timeline-label">ヒューマナイズ後</div>
+            <div class="timeline-bar" style="background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%); height: 12px; border-radius: 6px; margin: 0.5rem 0;"></div>
+          </div>
         </div>
       </div>
     `;
+  }
+
+  renderLightweightPhrases() {
+    const canvas = document.getElementById('visualizationCanvas');
+    if (!canvas) return;
+    
+    const phrases = this.lastAnalysis?.tracks[0]?.phrasing || [];
+    
+    canvas.innerHTML = `
+      <div class="simple-phrases">
+        <h4>フレーズ構造表示</h4>
+        <div class="phrase-overview">
+          <p>検出されたフレーズ数: <strong>${phrases.length}</strong></p>
+          <p>平均フレーズ長: <strong>${this.calculateAveragePhraseLength(phrases).toFixed(1)}秒</strong></p>
+        </div>
+        <div class="phrase-blocks" style="display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap;">
+          ${phrases.map((phrase, index) => {
+            const duration = ((phrase.end - phrase.start) / 480).toFixed(1);
+            const noteCount = phrase.notes?.length || 0;
+            return `
+              <div class="phrase-block" style="flex: 1; min-width: 120px; background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%); color: white; padding: 1rem; border-radius: var(--radius); text-align: center;">
+                <div class="phrase-label" style="font-weight: 600; margin-bottom: 0.25rem;">フレーズ ${index + 1}</div>
+                <div class="phrase-duration" style="font-size: 0.9rem;">${duration}秒</div>
+                <div class="phrase-notes" style="font-size: 0.8rem; opacity: 0.8;">${noteCount}音</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // Legacy heavy visualization functions removed for performance
+  // These are replaced by lightweight alternatives above
+  
+  formatDuration(seconds) {
+    if (seconds < 60) return `${seconds.toFixed(1)}秒`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}分${remainingSeconds.toFixed(1)}秒`;
   }
 
   renderPhraseVisualization() {
