@@ -1071,8 +1071,130 @@ class MIDIHumanizer {
     const notes = this.extractNotesFromTrack(track);
     if (notes.length < 6) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
     
-    // Use enhanced grid-aware phrase detection
+    // Check if this is a training file with phrase markers (C6/B5)
+    const trainingAnalysis = this.analyzeTrainingPhrases(track, notes);
+    
+    if (trainingAnalysis && trainingAnalysis.markerCount > 0) {
+      console.log('Using training data for phrase detection');
+      return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
+    }
+    
+    // Use enhanced grid-aware phrase detection for regular files
     return this.detectPhrasesWithGrid(track, notes, noteEvents);
+  }
+
+  detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis) {
+    const markers = this.extractPhraseMarkers(track);
+    const boundaries = markers.phraseBoundaries.map(m => m.time).sort((a, b) => a - b);
+    
+    // Filter out musical notes (exclude the marker notes C6, A5, and B5)
+    const musicalNotes = notes.filter(n => n.pitch !== 96 && n.pitch !== 93 && n.pitch !== 95);
+    const musicalNoteEvents = noteEvents.filter(e => e.data1 !== 96 && e.data1 !== 93 && e.data1 !== 95);
+    
+    console.log('Training data phrase detection:', {
+      totalNotes: notes.length,
+      musicalNotes: musicalNotes.length,
+      markerNotes: notes.length - musicalNotes.length,
+      phraseBoundaries: boundaries.length,
+      strongNuanceMarkers: markers.strongNuanceMarkers.length,
+      nuanceMarkers: markers.nuanceMarkers.length
+    });
+    
+    // Create phrases from the C6 boundaries
+    const phrases = this.createPhrasesFromBoundaries(boundaries, musicalNotes, musicalNoteEvents);
+    
+    // Analyze the training patterns for future use
+    this.learnFromTrainingData(trainingAnalysis);
+    
+    console.log('Training phrases created:', {
+      phraseCount: phrases.length,
+      avgPhraseDuration: phrases.length > 0 ? 
+        phrases.reduce((sum, p) => sum + (p.end - p.start), 0) / phrases.length / 480 : 0,
+      avgNotesPerPhrase: phrases.length > 0 ?
+        phrases.reduce((sum, p) => sum + p.notes.length, 0) / phrases.length : 0
+    });
+    
+    return phrases;
+  }
+  
+  // Store learned patterns from training data for improving regular phrase detection
+  learnFromTrainingData(trainingAnalysis) {
+    if (!this.learnedPatterns) {
+      this.learnedPatterns = {
+        phraseBoundaryFeatures: [],
+        strongNuanceFeatures: [],
+        nuanceFeatures: [],
+        comprehensivePatterns: {
+          repetitionPatterns: [],
+          chordPatterns: [],
+          rhythmicPatterns: [],
+          intervalPatterns: [],
+          lengthPatterns: []
+        }
+      };
+    }
+    
+    // Store the features for learning
+    this.learnedPatterns.phraseBoundaryFeatures.push(...trainingAnalysis.phraseFeatures);
+    this.learnedPatterns.strongNuanceFeatures.push(...(trainingAnalysis.strongNuanceFeatures || []));
+    this.learnedPatterns.nuanceFeatures.push(...trainingAnalysis.nuanceFeatures);
+    
+    // **ENHANCED LEARNING**: Store comprehensive patterns from limited training data
+    if (trainingAnalysis.comprehensivePatterns) {
+      const cp = trainingAnalysis.comprehensivePatterns;
+      
+      // Store repetition alignment patterns
+      if (cp.repetitionAlignment) {
+        this.learnedPatterns.comprehensivePatterns.repetitionPatterns.push(cp.repetitionAlignment);
+      }
+      
+      // Store chord alignment patterns
+      if (cp.chordAlignment) {
+        this.learnedPatterns.comprehensivePatterns.chordPatterns.push(cp.chordAlignment);
+      }
+      
+      // Store rhythmic patterns
+      if (cp.rhythmicPatterns) {
+        this.learnedPatterns.comprehensivePatterns.rhythmicPatterns.push(...cp.rhythmicPatterns.commonRhythms);
+      }
+      
+      // Store interval patterns
+      if (cp.intervalPatterns) {
+        this.learnedPatterns.comprehensivePatterns.intervalPatterns.push(...cp.intervalPatterns.commonIntervals);
+      }
+      
+      // Store length patterns
+      if (cp.lengthPatterns) {
+        this.learnedPatterns.comprehensivePatterns.lengthPatterns.push(...cp.lengthPatterns.categories);
+      }
+    }
+    
+    // Analyze patterns in the learned features
+    const boundaryFeatures = this.learnedPatterns.phraseBoundaryFeatures;
+    const strongNuanceFeatures = this.learnedPatterns.strongNuanceFeatures;
+    const comprehensivePatterns = this.learnedPatterns.comprehensivePatterns;
+    
+    if (boundaryFeatures.length > 0) {
+      const avgRestDuration = boundaryFeatures.reduce((sum, f) => sum + f.restDuration, 0) / boundaryFeatures.length;
+      const avgPitchChange = boundaryFeatures.reduce((sum, f) => sum + f.pitchChange, 0) / boundaryFeatures.length;
+      const avgVelocityChange = boundaryFeatures.reduce((sum, f) => sum + f.velocityChange, 0) / boundaryFeatures.length;
+      
+      console.log('Enhanced learned patterns from limited training data:', {
+        phraseBoundaryCount: boundaryFeatures.length,
+        strongNuanceCount: strongNuanceFeatures.length,
+        nuanceCount: this.learnedPatterns.nuanceFeatures.length,
+        avgRestDuration: Math.round(avgRestDuration),
+        avgPitchChange: avgPitchChange.toFixed(1),
+        avgVelocityChange: avgVelocityChange.toFixed(1),
+        comprehensivePatterns: {
+          repetitionSources: comprehensivePatterns.repetitionPatterns.length,
+          chordSources: comprehensivePatterns.chordPatterns.length,
+          rhythmicPatterns: comprehensivePatterns.rhythmicPatterns.length,
+          intervalPatterns: comprehensivePatterns.intervalPatterns.length,
+          lengthCategories: comprehensivePatterns.lengthPatterns.length
+        }
+      });
+    }
   }
 
   detectPhrasesWithGrid(track, notes, noteEvents) {
@@ -1082,10 +1204,18 @@ class MIDIHumanizer {
     // Step 2: Calculate musical feature change scores
     const changeScores = this.calculateMusicFeatureChanges(notes, grid);
     
-    // Step 3: Apply structural importance weighting
+    // Step 3: Apply learned patterns if available
+    if (this.learnedPatterns && this.learnedPatterns.phraseBoundaryFeatures.length > 0) {
+      this.enhanceScoresWithLearnedPatterns(changeScores, notes, grid);
+      
+      // **ENHANCED**: Apply comprehensive patterns learned from limited training data
+      this.applyComprehensiveLearnedPatterns(changeScores, notes, grid, track);
+    }
+    
+    // Step 4: Apply structural importance weighting
     const weightedScores = this.applyStructuralWeighting(changeScores, grid);
     
-    // Step 4: Detect peaks in weighted scores as phrase boundaries
+    // Step 5: Detect peaks in weighted scores as phrase boundaries
     const boundaries = this.detectPhraseBoundaryPeaks(weightedScores, grid);
     
     console.log('Enhanced phrase detection:', {
@@ -1098,7 +1228,8 @@ class MIDIHumanizer {
       finalPhrases: boundaries.length + 1,
       totalTicks: grid.totalTicks,
       firstNote: notes[0]?.time,
-      lastNote: notes[notes.length - 1]?.endTime
+      lastNote: notes[notes.length - 1]?.endTime,
+      hasLearnedPatterns: !!(this.learnedPatterns && this.learnedPatterns.phraseBoundaryFeatures.length > 0)
     });
     
     const rawPhrases = this.createPhrasesFromBoundaries(boundaries, notes, noteEvents);
@@ -1298,6 +1429,388 @@ class MIDIHumanizer {
     
     // Weighted combination
     return (densityChange * 0.3 + pitchChange * 0.3 + velocityChange * 0.2 + varianceChange * 0.2);
+  }
+
+  // Enhance change scores using patterns learned from training data
+  enhanceScoresWithLearnedPatterns(changeScores, notes, grid) {
+    if (!this.learnedPatterns || this.learnedPatterns.phraseBoundaryFeatures.length === 0) {
+      return;
+    }
+    
+    const learnedFeatures = this.learnedPatterns.phraseBoundaryFeatures;
+    
+    // Calculate average characteristics of learned phrase boundaries
+    const avgRestDuration = learnedFeatures.reduce((sum, f) => sum + f.restDuration, 0) / learnedFeatures.length;
+    const avgPitchChange = learnedFeatures.reduce((sum, f) => sum + f.pitchChange, 0) / learnedFeatures.length;
+    const avgVelocityChange = learnedFeatures.reduce((sum, f) => sum + f.velocityChange, 0) / learnedFeatures.length;
+    const avgDensityChange = learnedFeatures.reduce((sum, f) => sum + f.densityChange, 0) / learnedFeatures.length;
+    
+    console.log('Applying learned patterns:', {
+      learnedSamples: learnedFeatures.length,
+      avgRestDuration: Math.round(avgRestDuration),
+      avgPitchChange: avgPitchChange.toFixed(1),
+      avgVelocityChange: avgVelocityChange.toFixed(1),
+      avgDensityChange: avgDensityChange.toFixed(1)
+    });
+    
+    // Look for candidate positions that match learned patterns
+    const windowSize = 960; // 1 beat window for context analysis
+    
+    for (let i = 0; i < notes.length - 1; i++) {
+      const currentNote = notes[i];
+      const nextNote = notes[i + 1];
+      const candidateTime = nextNote.startTime;
+      
+      // Analyze context around this candidate boundary
+      const context = this.analyzeBoundaryContext(candidateTime, notes, windowSize);
+      
+      // Calculate similarity to learned patterns
+      let similarity = 0;
+      let matchCount = 0;
+      
+      // Rest duration similarity (if there's a significant rest)
+      if (context.restDuration > 0 && avgRestDuration > 0) {
+        const restSimilarity = 1 - Math.abs(context.restDuration - avgRestDuration) / Math.max(context.restDuration, avgRestDuration);
+        similarity += restSimilarity * 0.3;
+        matchCount++;
+      }
+      
+      // Pitch change similarity
+      if (context.pitchChange > 0 && avgPitchChange > 0) {
+        const pitchSimilarity = 1 - Math.abs(context.pitchChange - avgPitchChange) / Math.max(context.pitchChange, avgPitchChange, 12);
+        similarity += pitchSimilarity * 0.3;
+        matchCount++;
+      }
+      
+      // Velocity change similarity
+      if (context.velocityChange > 0 && avgVelocityChange > 0) {
+        const velocitySimilarity = 1 - Math.abs(context.velocityChange - avgVelocityChange) / Math.max(context.velocityChange, avgVelocityChange, 64);
+        similarity += velocitySimilarity * 0.2;
+        matchCount++;
+      }
+      
+      // Density change similarity
+      if (context.densityChange > 0 && avgDensityChange > 0) {
+        const densitySimilarity = 1 - Math.abs(context.densityChange - avgDensityChange) / Math.max(context.densityChange, avgDensityChange, 10);
+        similarity += densitySimilarity * 0.2;
+        matchCount++;
+      }
+      
+      // If this location matches learned patterns well, boost its score
+      if (matchCount > 0 && similarity > 0.5) {
+        const boost = similarity * 0.8; // Significant boost for good matches
+        
+        // Find existing change score for this time or add new one
+        let existingScore = changeScores.find(cs => Math.abs(cs.time - candidateTime) < grid.ticksPerBeat / 4);
+        
+        if (existingScore) {
+          existingScore.score += boost;
+          existingScore.features.learnedPatternBoost = boost;
+          existingScore.features.learnedSimilarity = similarity;
+        } else {
+          changeScores.push({
+            time: candidateTime,
+            score: boost,
+            features: {
+              type: 'learned-pattern',
+              learnedPatternBoost: boost,
+              learnedSimilarity: similarity,
+              matchCount: matchCount,
+              ...context
+            }
+          });
+        }
+      }
+    }
+    
+    // Sort change scores by time
+    changeScores.sort((a, b) => a.time - b.time);
+    
+    // Also apply strong nuance patterns if available
+    this.applyStrongNuancePatterns(changeScores, notes, grid);
+    
+    console.log('Enhanced with learned patterns:', {
+      totalChangeScores: changeScores.length,
+      learnedPatternBoosts: changeScores.filter(cs => cs.features.learnedPatternBoost).length,
+      strongNuanceBoosts: changeScores.filter(cs => cs.features.strongNuanceBoost).length
+    });
+  }
+
+  // Apply strong nuance patterns (A5 markers) with moderate weighting
+  applyStrongNuancePatterns(changeScores, notes, grid) {
+    if (!this.learnedPatterns || !this.learnedPatterns.strongNuanceFeatures || this.learnedPatterns.strongNuanceFeatures.length === 0) {
+      return;
+    }
+    
+    const strongNuanceFeatures = this.learnedPatterns.strongNuanceFeatures;
+    
+    // Calculate average characteristics of strong nuance markers
+    const avgRestDuration = strongNuanceFeatures.reduce((sum, f) => sum + f.restDuration, 0) / strongNuanceFeatures.length;
+    const avgPitchChange = strongNuanceFeatures.reduce((sum, f) => sum + f.pitchChange, 0) / strongNuanceFeatures.length;
+    const avgVelocityChange = strongNuanceFeatures.reduce((sum, f) => sum + f.velocityChange, 0) / strongNuanceFeatures.length;
+    const avgDensityChange = strongNuanceFeatures.reduce((sum, f) => sum + f.densityChange, 0) / strongNuanceFeatures.length;
+    
+    console.log('Applying strong nuance patterns:', {
+      strongNuanceSamples: strongNuanceFeatures.length,
+      avgRestDuration: Math.round(avgRestDuration),
+      avgPitchChange: avgPitchChange.toFixed(1),
+      avgVelocityChange: avgVelocityChange.toFixed(1),
+      avgDensityChange: avgDensityChange.toFixed(1)
+    });
+    
+    const windowSize = 960; // 1 beat window for context analysis
+    
+    for (let i = 0; i < notes.length - 1; i++) {
+      const currentNote = notes[i];
+      const nextNote = notes[i + 1];
+      const candidateTime = nextNote.startTime;
+      
+      // Analyze context around this candidate boundary
+      const context = this.analyzeBoundaryContext(candidateTime, notes, windowSize);
+      
+      // Calculate similarity to strong nuance patterns
+      let similarity = 0;
+      let matchCount = 0;
+      
+      // Rest duration similarity
+      if (context.restDuration > 0 && avgRestDuration > 0) {
+        const restSimilarity = 1 - Math.abs(context.restDuration - avgRestDuration) / Math.max(context.restDuration, avgRestDuration);
+        similarity += restSimilarity * 0.3;
+        matchCount++;
+      }
+      
+      // Pitch change similarity
+      if (context.pitchChange > 0 && avgPitchChange > 0) {
+        const pitchSimilarity = 1 - Math.abs(context.pitchChange - avgPitchChange) / Math.max(context.pitchChange, avgPitchChange, 12);
+        similarity += pitchSimilarity * 0.3;
+        matchCount++;
+      }
+      
+      // Velocity change similarity
+      if (context.velocityChange > 0 && avgVelocityChange > 0) {
+        const velocitySimilarity = 1 - Math.abs(context.velocityChange - avgVelocityChange) / Math.max(context.velocityChange, avgVelocityChange, 64);
+        similarity += velocitySimilarity * 0.2;
+        matchCount++;
+      }
+      
+      // Density change similarity
+      if (context.densityChange > 0 && avgDensityChange > 0) {
+        const densitySimilarity = 1 - Math.abs(context.densityChange - avgDensityChange) / Math.max(context.densityChange, avgDensityChange, 10);
+        similarity += densitySimilarity * 0.2;
+        matchCount++;
+      }
+      
+      // Apply moderate boost for strong nuance patterns (weaker than phrase boundaries)
+      if (matchCount > 0 && similarity > 0.4) {
+        const boost = similarity * 0.5; // Moderate boost (weaker than 0.8 for phrase boundaries)
+        
+        // Find existing change score for this time or add new one
+        let existingScore = changeScores.find(cs => Math.abs(cs.time - candidateTime) < grid.ticksPerBeat / 4);
+        
+        if (existingScore) {
+          existingScore.score += boost;
+          existingScore.features.strongNuanceBoost = boost;
+          existingScore.features.strongNuanceSimilarity = similarity;
+        } else {
+          changeScores.push({
+            time: candidateTime,
+            score: boost,
+            features: {
+              type: 'strong-nuance-pattern',
+              strongNuanceBoost: boost,
+              strongNuanceSimilarity: similarity,
+              matchCount: matchCount,
+              ...context
+            }
+          });
+        }
+      }
+    }
+    
+    // Sort change scores by time
+    changeScores.sort((a, b) => a.time - b.time);
+  }
+
+  // Apply comprehensive patterns learned from limited training data
+  applyComprehensiveLearnedPatterns(changeScores, notes, grid, track) {
+    if (!this.learnedPatterns || !this.learnedPatterns.comprehensivePatterns) {
+      return;
+    }
+    
+    const cp = this.learnedPatterns.comprehensivePatterns;
+    let totalBoosts = 0;
+    
+    // 1. Apply repetition pattern knowledge
+    if (cp.repetitionPatterns.length > 0) {
+      const repetitionBoundaries = this.findRepetitionBoundaries(notes);
+      totalBoosts += this.applyRepetitionPatternBoosts(changeScores, repetitionBoundaries, grid);
+    }
+    
+    // 2. Apply chord change pattern knowledge
+    if (cp.chordPatterns.length > 0) {
+      const chordBoundaries = this.findChordChangeBoundaries(track, notes);
+      totalBoosts += this.applyChordPatternBoosts(changeScores, chordBoundaries, grid);
+    }
+    
+    // 3. Apply rhythmic pattern knowledge
+    if (cp.rhythmicPatterns.length > 0) {
+      totalBoosts += this.applyRhythmicPatternBoosts(changeScores, notes, grid);
+    }
+    
+    // 4. Apply interval pattern knowledge
+    if (cp.intervalPatterns.length > 0) {
+      totalBoosts += this.applyIntervalPatternBoosts(changeScores, grid);
+    }
+    
+    console.log('Applied comprehensive patterns from limited training data:', {
+      repetitionPatterns: cp.repetitionPatterns.length,
+      chordPatterns: cp.chordPatterns.length,
+      rhythmicPatterns: cp.rhythmicPatterns.length,
+      intervalPatterns: cp.intervalPatterns.length,
+      totalBoosts: totalBoosts
+    });
+    
+    // Sort change scores by time
+    changeScores.sort((a, b) => a.time - b.time);
+  }
+  
+  // Apply boosts based on learned repetition patterns
+  applyRepetitionPatternBoosts(changeScores, repetitionBoundaries, grid) {
+    let boosts = 0;
+    const boostFactor = 0.3; // Moderate boost for repetition patterns
+    
+    repetitionBoundaries.forEach(repTime => {
+      let existingScore = changeScores.find(cs => Math.abs(cs.time - repTime) < grid.ticksPerBeat / 4);
+      
+      if (existingScore) {
+        existingScore.score += boostFactor;
+        existingScore.features.repetitionBoost = boostFactor;
+        boosts++;
+      } else {
+        changeScores.push({
+          time: repTime,
+          score: boostFactor,
+          features: {
+            type: 'repetition-pattern',
+            repetitionBoost: boostFactor
+          }
+        });
+        boosts++;
+      }
+    });
+    
+    return boosts;
+  }
+  
+  // Apply boosts based on learned chord change patterns
+  applyChordPatternBoosts(changeScores, chordBoundaries, grid) {
+    let boosts = 0;
+    const boostFactor = 0.25; // Moderate boost for chord patterns
+    
+    chordBoundaries.forEach(chordTime => {
+      let existingScore = changeScores.find(cs => Math.abs(cs.time - chordTime) < grid.ticksPerBeat / 4);
+      
+      if (existingScore) {
+        existingScore.score += boostFactor;
+        existingScore.features.chordBoost = boostFactor;
+        boosts++;
+      } else {
+        changeScores.push({
+          time: chordTime,
+          score: boostFactor,
+          features: {
+            type: 'chord-pattern',
+            chordBoost: boostFactor
+          }
+        });
+        boosts++;
+      }
+    });
+    
+    return boosts;
+  }
+  
+  // Apply boosts based on learned rhythmic patterns
+  applyRhythmicPatternBoosts(changeScores, notes, grid) {
+    let boosts = 0;
+    const cp = this.learnedPatterns.comprehensivePatterns;
+    
+    // Find locations matching learned rhythmic patterns
+    for (let i = 0; i < notes.length - 4; i++) {
+      const windowNotes = notes.slice(i, i + 4);
+      const currentPattern = this.extractRhythmPattern(windowNotes, windowNotes[2].startTime);
+      
+      // Check if this pattern matches any learned rhythmic patterns
+      const matchingPattern = cp.rhythmicPatterns.find(learnedPattern => 
+        this.rhythmPatternsMatch(currentPattern, learnedPattern.pattern)
+      );
+      
+      if (matchingPattern) {
+        const targetTime = windowNotes[2].startTime;
+        let existingScore = changeScores.find(cs => Math.abs(cs.time - targetTime) < grid.ticksPerBeat / 4);
+        
+        const boostFactor = 0.2 * (parseFloat(matchingPattern.percentage) / 100); // Scale by pattern frequency
+        
+        if (existingScore) {
+          existingScore.score += boostFactor;
+          existingScore.features.rhythmBoost = boostFactor;
+          boosts++;
+        } else {
+          changeScores.push({
+            time: targetTime,
+            score: boostFactor,
+            features: {
+              type: 'rhythm-pattern',
+              rhythmBoost: boostFactor,
+              patternFrequency: matchingPattern.percentage
+            }
+          });
+          boosts++;
+        }
+      }
+    }
+    
+    return boosts;
+  }
+  
+  // Apply boosts based on learned interval patterns
+  applyIntervalPatternBoosts(changeScores, grid) {
+    let boosts = 0;
+    const cp = this.learnedPatterns.comprehensivePatterns;
+    
+    // Sort change scores by time to find intervals
+    const sortedScores = [...changeScores].sort((a, b) => a.time - b.time);
+    
+    for (let i = 1; i < sortedScores.length; i++) {
+      const interval = sortedScores[i].time - sortedScores[i-1].time;
+      const quantizedInterval = Math.round(interval / 480) * 480;
+      
+      // Check if this interval matches learned patterns
+      const matchingInterval = cp.intervalPatterns.find(pattern => 
+        Math.abs(pattern.interval - quantizedInterval) < 240 // 0.5 beat tolerance
+      );
+      
+      if (matchingInterval) {
+        const boostFactor = 0.15 * (parseFloat(matchingInterval.percentage) / 100);
+        sortedScores[i].score += boostFactor;
+        sortedScores[i].features.intervalBoost = boostFactor;
+        boosts++;
+      }
+    }
+    
+    return boosts;
+  }
+  
+  // Check if two rhythm patterns match
+  rhythmPatternsMatch(pattern1, pattern2) {
+    // Simple comparison - in practice could be more sophisticated
+    try {
+      const sig1 = JSON.stringify(pattern1);
+      const sig2 = JSON.stringify(pattern2);
+      return sig1 === sig2;
+    } catch (e) {
+      return false;
+    }
   }
 
   applyStructuralWeighting(changeScores, grid) {
@@ -1878,6 +2391,389 @@ class MIDIHumanizer {
     }
     
     return boundaries;
+  }
+
+  // Analyze phrase markers from training MIDI files (C6 = 96, A5 = 93, B5 = 95)
+  extractPhraseMarkers(track) {
+    const markers = {
+      phraseBoundaries: [], // C6 notes (pitch 96) - strongest phrase boundaries
+      strongNuanceMarkers: [], // A5 notes (pitch 93) - strong groove/rhythm peaks
+      nuanceMarkers: []     // B5 notes (pitch 95) - subtle nuance variations
+    };
+    
+    const noteEvents = track.filter(event => this.isNoteOn(event));
+    
+    noteEvents.forEach(event => {
+      if (event.data1 === 96) { // C6 - main phrase boundary
+        markers.phraseBoundaries.push({
+          time: event.time,
+          pitch: event.data1,
+          velocity: event.data2,
+          type: 'phrase'
+        });
+      } else if (event.data1 === 93) { // A5 - strong groove/rhythm peak
+        markers.strongNuanceMarkers.push({
+          time: event.time,
+          pitch: event.data1,
+          velocity: event.data2,
+          type: 'strongNuance'
+        });
+      } else if (event.data1 === 95) { // B5 - subtle nuance marker
+        markers.nuanceMarkers.push({
+          time: event.time,
+          pitch: event.data1,
+          velocity: event.data2,
+          type: 'nuance'
+        });
+      }
+    });
+    
+    console.log('Phrase markers extracted:', {
+      phraseBoundaries: markers.phraseBoundaries.length,
+      strongNuanceMarkers: markers.strongNuanceMarkers.length,
+      nuanceMarkers: markers.nuanceMarkers.length,
+      boundaries: markers.phraseBoundaries.map(m => m.time),
+      strongNuances: markers.strongNuanceMarkers.map(m => m.time),
+      nuances: markers.nuanceMarkers.map(m => m.time)
+    });
+    
+    return markers;
+  }
+
+  // Learn phrase patterns from training data
+  analyzeTrainingPhrases(track, notes) {
+    const markers = this.extractPhraseMarkers(track);
+    const analysis = {
+      markerCount: markers.phraseBoundaries.length + markers.strongNuanceMarkers.length + markers.nuanceMarkers.length,
+      phraseFeatures: [],
+      strongNuanceFeatures: [],
+      nuanceFeatures: []
+    };
+    
+    if (markers.phraseBoundaries.length === 0) {
+      return null; // Not a training file
+    }
+    
+    // Analyze musical features around each phrase boundary
+    markers.phraseBoundaries.forEach(boundary => {
+      const features = this.analyzeBoundaryContext(boundary.time, notes);
+      analysis.phraseFeatures.push({
+        time: boundary.time,
+        ...features,
+        type: 'phrase'
+      });
+    });
+    
+    // Analyze musical features around each strong nuance marker (A5)
+    markers.strongNuanceMarkers.forEach(strongNuance => {
+      const features = this.analyzeBoundaryContext(strongNuance.time, notes);
+      analysis.strongNuanceFeatures.push({
+        time: strongNuance.time,
+        ...features,
+        type: 'strongNuance'
+      });
+    });
+    
+    // Analyze musical features around each nuance marker (B5)
+    markers.nuanceMarkers.forEach(nuance => {
+      const features = this.analyzeBoundaryContext(nuance.time, notes);
+      analysis.nuanceFeatures.push({
+        time: nuance.time,
+        ...features,
+        type: 'nuance'
+      });
+    });
+    
+    // **ENHANCED LEARNING**: Extract additional patterns from training data
+    // Since marker materials are limited, maximize learning from available data
+    this.extractComprehensivePatterns(track, notes, analysis, markers);
+    
+    console.log('Training phrase analysis:', {
+      phraseBoundaries: analysis.phraseFeatures.length,
+      strongNuanceMarkers: analysis.strongNuanceFeatures.length,
+      nuanceMarkers: analysis.nuanceFeatures.length,
+      avgPhraseDuration: this.calculateAveragePhraseDuration(markers.phraseBoundaries),
+      features: analysis.phraseFeatures.slice(0, 3), // Show first few features
+      comprehensivePatterns: analysis.comprehensivePatterns ? Object.keys(analysis.comprehensivePatterns).length : 0
+    });
+    
+    return analysis;
+  }
+
+  // Extract comprehensive patterns from limited training data
+  extractComprehensivePatterns(track, notes, analysis, markers) {
+    analysis.comprehensivePatterns = {};
+    
+    // 1. Analyze repetition patterns around markers
+    const repetitionBoundaries = this.findRepetitionBoundaries(notes);
+    analysis.comprehensivePatterns.repetitionAlignment = this.analyzeMarkerRepetitionAlignment(
+      markers, repetitionBoundaries
+    );
+    
+    // 2. Analyze chord progression patterns
+    const chordBoundaries = this.findChordChangeBoundaries(track, notes);
+    analysis.comprehensivePatterns.chordAlignment = this.analyzeMarkerChordAlignment(
+      markers, chordBoundaries
+    );
+    
+    // 3. Analyze rhythmic patterns around markers
+    analysis.comprehensivePatterns.rhythmicPatterns = this.analyzeRhythmicPatterns(
+      markers, notes
+    );
+    
+    // 4. Analyze interval patterns between phrases
+    analysis.comprehensivePatterns.intervalPatterns = this.analyzeIntervalPatterns(
+      markers.phraseBoundaries, notes
+    );
+    
+    // 5. Analyze phrase length distribution patterns
+    analysis.comprehensivePatterns.lengthPatterns = this.analyzeLengthPatterns(
+      markers.phraseBoundaries
+    );
+    
+    console.log('Comprehensive pattern extraction:', {
+      repetitionAlignments: analysis.comprehensivePatterns.repetitionAlignment.matches,
+      chordAlignments: analysis.comprehensivePatterns.chordAlignment.matches,
+      rhythmicPatterns: analysis.comprehensivePatterns.rhythmicPatterns.patterns.length,
+      intervalPatterns: analysis.comprehensivePatterns.intervalPatterns.commonIntervals.length,
+      lengthPatterns: analysis.comprehensivePatterns.lengthPatterns.categories.length
+    });
+  }
+  
+  // Analyze how markers align with detected repetitions
+  analyzeMarkerRepetitionAlignment(markers, repetitionBoundaries) {
+    const alignment = { matches: 0, patterns: [] };
+    const tolerance = 480; // 1 beat tolerance
+    
+    markers.phraseBoundaries.forEach(marker => {
+      const nearbyRepetition = repetitionBoundaries.find(rep => 
+        Math.abs(rep - marker.time) < tolerance
+      );
+      if (nearbyRepetition) {
+        alignment.matches++;
+        alignment.patterns.push({
+          markerTime: marker.time,
+          repetitionTime: nearbyRepetition,
+          offset: nearbyRepetition - marker.time
+        });
+      }
+    });
+    
+    return alignment;
+  }
+  
+  // Analyze how markers align with chord changes
+  analyzeMarkerChordAlignment(markers, chordBoundaries) {
+    const alignment = { matches: 0, patterns: [] };
+    const tolerance = 480; // 1 beat tolerance
+    
+    markers.phraseBoundaries.forEach(marker => {
+      const nearbyChordChange = chordBoundaries.find(chord => 
+        Math.abs(chord - marker.time) < tolerance
+      );
+      if (nearbyChordChange) {
+        alignment.matches++;
+        alignment.patterns.push({
+          markerTime: marker.time,
+          chordTime: nearbyChordChange,
+          offset: nearbyChordChange - marker.time
+        });
+      }
+    });
+    
+    return alignment;
+  }
+  
+  // Analyze rhythmic patterns around markers
+  analyzeRhythmicPatterns(markers, notes) {
+    const patterns = { patterns: [], commonRhythms: [] };
+    const windowSize = 1920; // 2 beats
+    
+    markers.phraseBoundaries.forEach(marker => {
+      const windowNotes = notes.filter(n => 
+        n.startTime >= marker.time - windowSize && 
+        n.startTime < marker.time + windowSize
+      );
+      
+      if (windowNotes.length > 0) {
+        const rhythmPattern = this.extractRhythmPattern(windowNotes, marker.time);
+        patterns.patterns.push(rhythmPattern);
+      }
+    });
+    
+    // Find common rhythmic patterns
+    patterns.commonRhythms = this.findCommonRhythms(patterns.patterns);
+    
+    return patterns;
+  }
+  
+  // Extract rhythm pattern around a marker
+  extractRhythmPattern(notes, centerTime) {
+    const pattern = {
+      beforeMarker: [],
+      afterMarker: []
+    };
+    
+    notes.forEach(note => {
+      const relativeTime = note.startTime - centerTime;
+      const rhythmicValue = this.quantizeToRhythmicGrid(relativeTime);
+      
+      if (relativeTime < 0) {
+        pattern.beforeMarker.push(rhythmicValue);
+      } else {
+        pattern.afterMarker.push(rhythmicValue);
+      }
+    });
+    
+    return pattern;
+  }
+  
+  // Quantize timing to rhythmic grid for pattern matching
+  quantizeToRhythmicGrid(timeOffset) {
+    const grid = 96; // 16th note grid
+    return Math.round(timeOffset / grid) * grid;
+  }
+  
+  // Find common rhythmic patterns across multiple markers
+  findCommonRhythms(patterns) {
+    const commonRhythms = [];
+    const threshold = Math.max(2, Math.floor(patterns.length * 0.3)); // 30% threshold
+    
+    // Simple pattern frequency analysis
+    const patternCounts = {};
+    patterns.forEach(pattern => {
+      const signature = JSON.stringify(pattern);
+      patternCounts[signature] = (patternCounts[signature] || 0) + 1;
+    });
+    
+    Object.entries(patternCounts).forEach(([signature, count]) => {
+      if (count >= threshold) {
+        commonRhythms.push({
+          pattern: JSON.parse(signature),
+          frequency: count,
+          percentage: (count / patterns.length * 100).toFixed(1)
+        });
+      }
+    });
+    
+    return commonRhythms;
+  }
+  
+  // Analyze interval patterns between phrase boundaries
+  analyzeIntervalPatterns(boundaries) {
+    const patterns = { intervals: [], commonIntervals: [] };
+    
+    for (let i = 1; i < boundaries.length; i++) {
+      const interval = boundaries[i].time - boundaries[i-1].time;
+      patterns.intervals.push(interval);
+    }
+    
+    // Find common interval lengths
+    const intervalCounts = {};
+    patterns.intervals.forEach(interval => {
+      const quantized = Math.round(interval / 480) * 480; // Quantize to beat grid
+      intervalCounts[quantized] = (intervalCounts[quantized] || 0) + 1;
+    });
+    
+    // Extract most common intervals
+    patterns.commonIntervals = Object.entries(intervalCounts)
+      .map(([interval, count]) => ({
+        interval: parseInt(interval),
+        beats: parseInt(interval) / 480,
+        frequency: count,
+        percentage: (count / patterns.intervals.length * 100).toFixed(1)
+      }))
+      .filter(item => item.frequency >= 2)
+      .sort((a, b) => b.frequency - a.frequency);
+    
+    return patterns;
+  }
+  
+  // Analyze phrase length distribution patterns
+  analyzeLengthPatterns(boundaries) {
+    const patterns = { lengths: [], categories: [] };
+    
+    // Calculate phrase lengths
+    for (let i = 1; i < boundaries.length; i++) {
+      const length = boundaries[i].time - boundaries[i-1].time;
+      patterns.lengths.push(length);
+    }
+    
+    // Categorize phrase lengths
+    const categories = {
+      short: patterns.lengths.filter(l => l < 1920).length,    // < 2 beats
+      medium: patterns.lengths.filter(l => l >= 1920 && l < 3840).length, // 2-4 beats
+      long: patterns.lengths.filter(l => l >= 3840).length     // > 4 beats
+    };
+    
+    patterns.categories = Object.entries(categories).map(([category, count]) => ({
+      category,
+      count,
+      percentage: (count / patterns.lengths.length * 100).toFixed(1)
+    }));
+    
+    return patterns;
+  }
+  
+  // Analyze musical context around a boundary point
+  analyzeBoundaryContext(boundaryTime, notes, windowSize = 960) { // 1 beat window
+    const beforeNotes = notes.filter(n => 
+      n.startTime >= boundaryTime - windowSize && n.startTime < boundaryTime
+    );
+    const afterNotes = notes.filter(n => 
+      n.startTime >= boundaryTime && n.startTime < boundaryTime + windowSize
+    );
+    
+    return {
+      restDuration: this.calculateRestBefore(boundaryTime, notes),
+      pitchChange: this.calculatePitchChange(beforeNotes, afterNotes),
+      velocityChange: this.calculateVelocityChange(beforeNotes, afterNotes),
+      densityChange: this.calculateDensityChange(beforeNotes, afterNotes),
+      beforeDensity: beforeNotes.length,
+      afterDensity: afterNotes.length,
+      beforeAvgPitch: beforeNotes.length > 0 ? beforeNotes.reduce((sum, n) => sum + n.pitch, 0) / beforeNotes.length : 60,
+      afterAvgPitch: afterNotes.length > 0 ? afterNotes.reduce((sum, n) => sum + n.pitch, 0) / afterNotes.length : 60
+    };
+  }
+  
+  calculateRestBefore(boundaryTime, notes) {
+    const notesBefore = notes.filter(n => n.endTime <= boundaryTime).sort((a, b) => b.endTime - a.endTime);
+    if (notesBefore.length === 0) return 0;
+    
+    return boundaryTime - notesBefore[0].endTime;
+  }
+  
+  calculatePitchChange(beforeNotes, afterNotes) {
+    if (beforeNotes.length === 0 || afterNotes.length === 0) return 0;
+    
+    const beforeAvg = beforeNotes.reduce((sum, n) => sum + n.pitch, 0) / beforeNotes.length;
+    const afterAvg = afterNotes.reduce((sum, n) => sum + n.pitch, 0) / afterNotes.length;
+    
+    return Math.abs(afterAvg - beforeAvg);
+  }
+  
+  calculateVelocityChange(beforeNotes, afterNotes) {
+    if (beforeNotes.length === 0 || afterNotes.length === 0) return 0;
+    
+    const beforeAvg = beforeNotes.reduce((sum, n) => sum + n.velocity, 0) / beforeNotes.length;
+    const afterAvg = afterNotes.reduce((sum, n) => sum + n.velocity, 0) / afterNotes.length;
+    
+    return Math.abs(afterAvg - beforeAvg);
+  }
+  
+  calculateDensityChange(beforeNotes, afterNotes) {
+    return Math.abs(afterNotes.length - beforeNotes.length);
+  }
+  
+  calculateAveragePhraseDuration(boundaries) {
+    if (boundaries.length < 2) return 0;
+    
+    let totalDuration = 0;
+    for (let i = 1; i < boundaries.length; i++) {
+      totalDuration += boundaries[i].time - boundaries[i-1].time;
+    }
+    
+    return totalDuration / (boundaries.length - 1);
   }
 
   analyzeDynamicStructure(track) {
