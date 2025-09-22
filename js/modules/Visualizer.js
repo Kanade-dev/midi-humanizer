@@ -301,11 +301,12 @@ export class Visualizer {
     notes.forEach(note => {
       const noteIndex = note.pitch - baseNote;
       if (noteIndex >= 0 && noteIndex < 24) {
-        const x = (note.startTime * pixelsPerTick - this.scrollPosition) % this.width;
+        // Fix: Remove modulo operation that causes note wrapping/duplication
+        const x = note.startTime * pixelsPerTick - this.scrollPosition;
         const width = ((note.endTime || note.startTime + 480) - note.startTime) * pixelsPerTick;
         const y = this.height - 60 - (noteIndex + 1) * noteHeight;
         
-        // Only draw if visible
+        // Only draw if visible in viewport
         if (x + width >= 0 && x <= this.width) {
           this.ctx.fillRect(x, y + 1, Math.max(2, width), noteHeight - 2);
           
@@ -313,6 +314,7 @@ export class Visualizer {
           const velocityAlpha = (note.velocity || 64) / 127;
           this.ctx.globalAlpha = alpha * velocityAlpha;
           this.ctx.fillRect(x, y + 1, Math.max(1, width * 0.1), noteHeight - 2);
+          this.ctx.globalAlpha = alpha; // Reset alpha for next note
         }
       }
     });
@@ -333,7 +335,8 @@ export class Visualizer {
     this.ctx.setLineDash([5, 5]);
     
     this.phrases.forEach((phrase, index) => {
-      const x = (phrase.start * pixelsPerTick - this.scrollPosition) % this.width;
+      // Fix: Remove modulo operation that causes phrase boundary wrapping
+      const x = phrase.start * pixelsPerTick - this.scrollPosition;
       
       if (x >= 0 && x <= this.width) {
         this.ctx.beginPath();
@@ -546,8 +549,14 @@ export class Visualizer {
    * Update playback progress
    */
   updatePlaybackProgress(progress) {
-    // In PicoTune style, the playback indicator stays centered and content scrolls
-    this.scrollPosition = progress * this.timelineWidthPx - this.width * this.playbackPosition;
+    // Fix: Proper scrolling behavior - start from beginning, center playback indicator only during playback
+    if (progress === 0) {
+      // At start, show beginning of timeline
+      this.scrollPosition = 0;
+    } else {
+      // During playback, keep indicator centered and scroll content
+      this.scrollPosition = progress * this.timelineWidthPx - this.width * this.playbackPosition;
+    }
     this.render();
   }
 
@@ -556,6 +565,10 @@ export class Visualizer {
    */
   setPlaying(isPlaying) {
     this.isPlaying = isPlaying;
+    if (isPlaying) {
+      // When starting playback, reset to beginning
+      this.scrollPosition = 0;
+    }
     this.render();
   }
 

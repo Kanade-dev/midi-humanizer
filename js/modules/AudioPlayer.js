@@ -101,12 +101,16 @@ export class AudioPlayer {
       this.currentPlayback = null;
     }
     
+    // Immediately stop progress tracking
+    this.stopProgressTracking();
+    
     // Cleanup active audio nodes efficiently
     this.activeAudioNodes.forEach(nodeSet => {
       nodeSet.oscillators.forEach(osc => {
         try {
-          if (osc.playbackState !== osc.FINISHED_STATE) {
-            osc.stop(this.audioContext.currentTime + 0.01);
+          // Use more reliable stopping method
+          if (osc && osc.stop && typeof osc.stop === 'function') {
+            osc.stop(this.audioContext.currentTime);
           }
         } catch(e) {
           // Ignore errors from already-stopped oscillators
@@ -114,8 +118,10 @@ export class AudioPlayer {
       });
       nodeSet.gains.forEach(gain => {
         try {
-          if (gain.gain) {
+          if (gain && gain.gain && gain.disconnect) {
+            // Set gain to 0 immediately and disconnect
             gain.gain.setValueAtTime(0, this.audioContext.currentTime);
+            gain.disconnect();
           }
         } catch(e) {
           // Ignore errors
@@ -123,17 +129,12 @@ export class AudioPlayer {
       });
     });
     
-    // Clear old nodes after delay to ensure cleanup
-    setTimeout(() => {
-      this.activeAudioNodes = this.activeAudioNodes.filter(nodeSet => 
-        nodeSet.endTime > this.audioContext.currentTime
-      );
-    }, 1000);
+    // Clear all active nodes immediately
+    this.activeAudioNodes = [];
     
     this.isPlaying = false;
     this.isPlayingOriginal = false;
     this.isPlayingHumanized = false;
-    this.stopProgressTracking();
   }
 
   /**
