@@ -395,7 +395,7 @@ class MIDIHumanizer {
       const intensity = parseFloat(document.getElementById('intensity').value);
       const seed = document.getElementById('seed').value || Date.now();
 
-      this.humanizedMidiData = this.humanizeMIDI(midiData, style, intensity, seed);
+      this.humanizedMidiData = this.humanizeMIDI(midiData, style, intensity, seed, true); // true = isUserUpload
 
       // Show results
       this.showResults();
@@ -518,7 +518,7 @@ class MIDIHumanizer {
     return events;
   }
 
-  humanizeMIDI(midiData, style, intensity, seed) {
+  humanizeMIDI(midiData, style, intensity, seed, isUserUpload = false) {
     // Set random seed for reproducibility
     this.rng = this.seedRandom(seed);
     
@@ -526,7 +526,7 @@ class MIDIHumanizer {
     this.lastStyle = style;
     
     // Perform musical analysis for intelligent humanization
-    const musicalAnalysis = this.analyzeMusicStructure(midiData.tracks, style);
+    const musicalAnalysis = this.analyzeMusicStructure(midiData.tracks, style, isUserUpload);
     
     // Store analysis for visualization
     this.lastAnalysis = musicalAnalysis;
@@ -804,7 +804,7 @@ class MIDIHumanizer {
   }
 
   // Musical Analysis Functions for Intelligent Humanization
-  analyzeMusicStructure(tracks, style) {
+  analyzeMusicStructure(tracks, style, isUserUpload = false) {
     const analysis = {
       tracks: [],
       globalTempo: 120,
@@ -816,7 +816,7 @@ class MIDIHumanizer {
         chords: this.analyzeChordProgression(track),
         melody: this.analyzeMelody(track),
         rhythm: this.analyzeRhythmicContext(track, style),
-        phrasing: this.identifyPhraseBoundaries(track),
+        phrasing: this.identifyPhraseBoundaries(track, isUserUpload),
         dynamics: this.analyzeDynamicStructure(track)
       };
       analysis.tracks.push(trackAnalysis);
@@ -1033,7 +1033,7 @@ class MIDIHumanizer {
     return patterns[style] || patterns.pop;
   }
 
-  identifyPhraseBoundaries(track) {
+  identifyPhraseBoundaries(track, isUserUpload = false) {
     const noteEvents = track.filter(event => this.isNoteOn(event));
     if (noteEvents.length < 6) return [{ start: 0, end: noteEvents[noteEvents.length - 1]?.time || 0, notes: noteEvents }];
     
@@ -1041,21 +1041,38 @@ class MIDIHumanizer {
     const notes = this.extractNotesFromTrack(track);
     if (notes.length < 6) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
     
-    // Check if this is a training file with phrase markers (C6/B5)
-    const trainingAnalysis = this.analyzeTrainingPhrases(track, notes);
-    
-    if (trainingAnalysis && trainingAnalysis.markerCount > 0) {
-      console.log('Using training data for phrase detection');
-      return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
+    // Skip marker detection for user-uploaded files (they won't have training markers)
+    if (!isUserUpload) {
+      // Check if this is a training file with phrase markers (C6/B5)
+      const trainingAnalysis = this.analyzeTrainingPhrases(track, notes);
+      
+      if (trainingAnalysis && trainingAnalysis.markerCount > 0) {
+        console.log('🎵 Using training data for phrase detection - Enhanced analysis mode activated');
+        console.log('Training markers found:', {
+          phraseBoundaries: trainingAnalysis.markerCount,
+          strongNuanceMarkers: trainingAnalysis.strongNuanceFeatures?.length || 0,
+          regularNuanceMarkers: trainingAnalysis.nuanceFeatures?.length || 0
+        });
+        return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
+      }
+    } else {
+      console.log('🎯 User-uploaded file: Skipping marker detection');
     }
     
     // **NEW**: If we have learned patterns from previous training data, prefer using them over grid-based detection
     if (this.learnedPatterns && this.learnedPatterns.phraseBoundaryFeatures.length > 0) {
-      console.log('Using learned patterns for phrase detection (bypassing grid-based analysis)');
+      console.log('🧠 Using learned patterns for phrase detection (bypassing grid-based analysis)');
+      console.log('Learned pattern database:', {
+        phraseBoundaryFeatures: this.learnedPatterns.phraseBoundaryFeatures.length,
+        strongNuanceFeatures: this.learnedPatterns.strongNuanceFeatures.length,
+        nuanceFeatures: this.learnedPatterns.nuanceFeatures.length,
+        comprehensivePatterns: Object.keys(this.learnedPatterns.comprehensivePatterns || {}).length > 0
+      });
       return this.detectPhrasesUsingLearnedPatterns(track, notes, noteEvents);
     }
     
     // Use enhanced grid-aware phrase detection for regular files as fallback
+    console.log('📊 Using grid-based analysis (no training data available)');
     return this.detectPhrasesWithGrid(track, notes, noteEvents);
   }
 
@@ -1533,7 +1550,7 @@ class MIDIHumanizer {
     const avgVelocityChange = learnedFeatures.reduce((sum, f) => sum + f.velocityChange, 0) / learnedFeatures.length;
     const avgDensityChange = learnedFeatures.reduce((sum, f) => sum + f.densityChange, 0) / learnedFeatures.length;
     
-    console.log('Applying learned patterns:', {
+    console.log('🧠 Applying learned patterns with enhanced weighting:', {
       learnedSamples: learnedFeatures.length,
       avgRestDuration: Math.round(avgRestDuration),
       avgPitchChange: avgPitchChange.toFixed(1),
@@ -1584,9 +1601,9 @@ class MIDIHumanizer {
         matchCount++;
       }
       
-      // If this location matches learned patterns well, boost its score
-      if (matchCount > 0 && similarity > 0.5) {
-        const boost = similarity * 0.8; // Significant boost for good matches
+      // If this location matches learned patterns well, boost its score (enhanced for training data priority)
+      if (matchCount > 0 && similarity > 0.3) { // Lowered threshold from 0.5 to 0.3 for more aggressive learning
+        const boost = similarity * 1.2; // Increased boost from 0.8 to 1.2 for stronger training data influence
         
         // Find existing change score for this time or add new one
         let existingScore = changeScores.find(cs => Math.abs(cs.time - candidateTime) < grid.ticksPerBeat / 4);
@@ -1617,10 +1634,11 @@ class MIDIHumanizer {
     // Also apply strong nuance patterns if available
     this.applyStrongNuancePatterns(changeScores, notes, grid);
     
-    console.log('Enhanced with learned patterns:', {
+    console.log('🎯 Enhanced with learned patterns (training data prioritized):', {
       totalChangeScores: changeScores.length,
       learnedPatternBoosts: changeScores.filter(cs => cs.features.learnedPatternBoost).length,
-      strongNuanceBoosts: changeScores.filter(cs => cs.features.strongNuanceBoost).length
+      strongNuanceBoosts: changeScores.filter(cs => cs.features.strongNuanceBoost).length,
+      maxLearnedBoost: Math.max(...changeScores.filter(cs => cs.features.learnedPatternBoost).map(cs => cs.features.learnedPatternBoost), 0).toFixed(2)
     });
   }
 
@@ -3980,8 +3998,8 @@ class MIDIHumanizer {
       humanizedNotes.length > 0 ? Math.max(...humanizedNotes.map(n => n.endTime)) : 0
     ) || 1000; // Default 1 second if no notes
     
-    // Initialize zoom if not set
-    if (!this.timelineZoom) this.timelineZoom = 1;
+    // Initialize zoom if not set - default to 500% zoom for better visibility
+    if (!this.timelineZoom) this.timelineZoom = 5;
     const zoomedWidth = 100 * this.timelineZoom; // Base width percentage times zoom
     
     canvas.innerHTML = `
@@ -4120,7 +4138,7 @@ class MIDIHumanizer {
   }
   
   resetTimelineZoom() {
-    this.timelineZoom = 1;
+    this.timelineZoom = 5; // Reset to 500% for better visibility
     if (this.currentVisualizationMode === 'timeline') {
       this.renderLightweightTimeline();
     }
