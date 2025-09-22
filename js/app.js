@@ -143,7 +143,7 @@ class MIDIHumanizerApp {
       const track = midiData.tracks[i];
       
       // Enhanced phrase detection (2-1: フレーズ検知機能)
-      const phrases = this.phraseDetector.identifyPhraseBoundaries(track, true);
+      const phrases = this.phraseDetector.identifyPhraseBoundaries(track, true, settings.phraseDetectionMode);
       
       // Analyze chords for velocity variations (2-2: コードなどを検知し軽微なベロシティの揺らぎを加える)
       const chords = this.humanizer.analyzeChordProgression(track);

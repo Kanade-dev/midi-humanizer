@@ -305,7 +305,6 @@ export class UI {
         <div class="playback-controls">
           <button id="playOriginal" class="play-button">オリジナル再生</button>
           <button id="playHumanized" class="play-button">ヒューマナイズ後再生</button>
-          <button id="stopPlayback" class="stop-button">停止</button>
         </div>
       </div>
 
@@ -354,31 +353,46 @@ export class UI {
     // Playback controls
     const playOriginalBtn = document.getElementById('playOriginal');
     const playHumanizedBtn = document.getElementById('playHumanized');
-    const stopPlaybackBtn = document.getElementById('stopPlayback');
+    // Note: Removed stopPlaybackBtn as it will be removed from UI
     
     if (playOriginalBtn) {
       playOriginalBtn.addEventListener('click', () => {
-        if (this.onPlayOriginal && this.originalMidiData) {
-          this.onPlayOriginal(this.originalMidiData);
-          this.updatePlaybackButtons('original');
+        // Check current button state to determine action
+        const isCurrentlyPlaying = playOriginalBtn.textContent.includes('停止');
+        
+        if (isCurrentlyPlaying) {
+          // Currently playing, so stop
+          if (this.onStopPlayback) {
+            this.onStopPlayback();
+            this.updatePlaybackButtons('stopped');
+          }
+        } else {
+          // Currently stopped, so play
+          if (this.onPlayOriginal && this.originalMidiData) {
+            this.onPlayOriginal(this.originalMidiData);
+            this.updatePlaybackButtons('original');
+          }
         }
       });
     }
     
     if (playHumanizedBtn) {
       playHumanizedBtn.addEventListener('click', () => {
-        if (this.onPlayHumanized && this.humanizedMidiData) {
-          this.onPlayHumanized(this.humanizedMidiData);
-          this.updatePlaybackButtons('humanized');
-        }
-      });
-    }
-    
-    if (stopPlaybackBtn) {
-      stopPlaybackBtn.addEventListener('click', () => {
-        if (this.onStopPlayback) {
-          this.onStopPlayback();
-          this.updatePlaybackButtons('stopped');
+        // Check current button state to determine action
+        const isCurrentlyPlaying = playHumanizedBtn.textContent.includes('停止');
+        
+        if (isCurrentlyPlaying) {
+          // Currently playing, so stop
+          if (this.onStopPlayback) {
+            this.onStopPlayback();
+            this.updatePlaybackButtons('stopped');
+          }
+        } else {
+          // Currently stopped, so play
+          if (this.onPlayHumanized && this.humanizedMidiData) {
+            this.onPlayHumanized(this.humanizedMidiData);
+            this.updatePlaybackButtons('humanized');
+          }
         }
       });
     }

@@ -210,35 +210,105 @@ export class Visualizer {
    */
   renderTimeline() {
     const rollHeight = this.height - 60; // Leave space for info
-    const noteHeight = rollHeight / 24; // 24 visible notes (2 octaves)
-    const baseNote = 60; // C4 as base
+    
+    // Determine note range based on actual notes in data
+    const noteRange = this.calculateOptimalNoteRange();
+    const noteHeight = rollHeight / noteRange.count;
+    const baseNote = noteRange.lowest;
     
     // Draw piano roll background
-    this.drawPianoRollBackground(noteHeight, baseNote);
+    this.drawPianoRollBackground(noteHeight, baseNote, noteRange.count);
     
     // Draw notes (prioritize humanized if available)
     const notesToDraw = this.humanizedNotes.length > 0 ? this.humanizedNotes : this.originalNotes;
-    this.drawNotes(notesToDraw, noteHeight, baseNote, '#4CAF50');
+    this.drawNotes(notesToDraw, noteHeight, baseNote, '#4CAF50', noteRange.count);
     
     // Draw original notes in different color if comparing
     if (this.humanizedNotes.length > 0 && this.currentMode === 'timeline') {
-      this.drawNotes(this.originalNotes, noteHeight, baseNote, '#FF9800', 0.3);
+      this.drawNotes(this.originalNotes, noteHeight, baseNote, '#FF9800', 0.3, noteRange.count);
     }
     
     // Draw phrase boundaries
     this.drawPhraseBoundaries(rollHeight);
     
     // Draw info panel
-    this.drawInfoPanel();
+    this.drawInfoPanel(noteRange);
+  }
+
+  /**
+   * Calculate optimal note range based on actual notes in the data
+   */
+  calculateOptimalNoteRange() {
+    const allNotes = [...this.originalNotes, ...this.humanizedNotes];
+    
+    if (allNotes.length === 0) {
+      // Default range if no notes - middle 5 octaves
+      return {
+        lowest: 36, // C2
+        highest: 96, // C7
+        count: 60
+      };
+    }
+    
+    const pitches = allNotes.map(note => note.pitch).filter(p => p !== undefined);
+    if (pitches.length === 0) {
+      // Fallback to default range
+      return {
+        lowest: 36, // C2
+        highest: 96, // C7
+        count: 60
+      };
+    }
+    
+    const minPitch = Math.min(...pitches);
+    const maxPitch = Math.max(...pitches);
+    const rangePitches = maxPitch - minPitch;
+    
+    // Ensure minimum visible range of 3 octaves
+    const minRange = 36;
+    const actualRange = Math.max(rangePitches + 12, minRange); // Add padding
+    
+    // Limit maximum range to 6 octaves for readability
+    const maxRange = 72;
+    const finalRange = Math.min(actualRange, maxRange);
+    
+    // Center the range around the actual notes
+    const centerPitch = Math.round((minPitch + maxPitch) / 2);
+    const halfRange = Math.round(finalRange / 2);
+    
+    let lowest = Math.max(21, centerPitch - halfRange); // A0 minimum
+    let highest = Math.min(108, centerPitch + halfRange); // C8 maximum
+    
+    // Ensure we have exactly the range we want
+    const actualCount = highest - lowest + 1;
+    if (actualCount < finalRange) {
+      // Adjust to get exactly the range we want
+      const shortfall = finalRange - actualCount;
+      if (lowest > 21) {
+        const addToBottom = Math.min(shortfall, lowest - 21);
+        lowest -= addToBottom;
+        if (shortfall - addToBottom > 0 && highest < 108) {
+          highest += Math.min(shortfall - addToBottom, 108 - highest);
+        }
+      } else if (highest < 108) {
+        highest += Math.min(shortfall, 108 - highest);
+      }
+    }
+    
+    return {
+      lowest: lowest,
+      highest: highest,
+      count: highest - lowest + 1
+    };
   }
 
   /**
    * Draw piano roll background
    */
-  drawPianoRollBackground(noteHeight, baseNote) {
+  drawPianoRollBackground(noteHeight, baseNote, noteCount) {
     const whiteKeys = [0, 2, 4, 5, 7, 9, 11]; // C, D, E, F, G, A, B
     
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < noteCount; i++) {
       const note = (baseNote + i) % 12;
       const y = this.height - 60 - (i + 1) * noteHeight;
       
@@ -247,12 +317,14 @@ export class Visualizer {
       this.ctx.fillStyle = isWhiteKey ? '#1a1a1a' : '#2a2a2a';
       this.ctx.fillRect(0, y, this.width, noteHeight);
       
-      // Draw note labels
-      this.ctx.fillStyle = '#666';
-      this.ctx.font = '10px monospace';
-      this.ctx.textAlign = 'left';
-      const noteName = this.getNoteNameFromMIDI(baseNote + i);
-      this.ctx.fillText(noteName, 5, y + noteHeight / 2 + 3);
+      // Draw note labels (only for larger note heights to avoid clutter)
+      if (noteHeight >= 8) {
+        this.ctx.fillStyle = '#666';
+        this.ctx.font = `${Math.min(10, noteHeight - 2)}px monospace`;
+        this.ctx.textAlign = 'left';
+        const noteName = this.getNoteNameFromMIDI(baseNote + i);
+        this.ctx.fillText(noteName, 5, y + noteHeight / 2 + 3);
+      }
     }
     
     // Draw grid lines
@@ -261,7 +333,7 @@ export class Visualizer {
     this.ctx.beginPath();
     
     // Horizontal lines
-    for (let i = 0; i <= 24; i++) {
+    for (let i = 0; i <= noteCount; i++) {
       const y = this.height - 60 - i * noteHeight;
       this.ctx.moveTo(0, y);
       this.ctx.lineTo(this.width, y);
@@ -290,7 +362,7 @@ export class Visualizer {
   /**
    * Draw MIDI notes
    */
-  drawNotes(notes, noteHeight, baseNote, color, alpha = 1) {
+  drawNotes(notes, noteHeight, baseNote, color, alpha = 1, noteCount = 24) {
     if (notes.length === 0 || this.timelineTotalDuration === 0) return;
     
     const pixelsPerTick = this.timelineWidthPx / this.timelineTotalDuration;
@@ -300,8 +372,7 @@ export class Visualizer {
     
     notes.forEach(note => {
       const noteIndex = note.pitch - baseNote;
-      if (noteIndex >= 0 && noteIndex < 24) {
-        // Fix: Remove modulo operation that causes note wrapping/duplication
+      if (noteIndex >= 0 && noteIndex < noteCount) {
         const x = note.startTime * pixelsPerTick - this.scrollPosition;
         const width = ((note.endTime || note.startTime + 480) - note.startTime) * pixelsPerTick;
         const y = this.height - 60 - (noteIndex + 1) * noteHeight;
@@ -358,7 +429,7 @@ export class Visualizer {
   /**
    * Draw info panel
    */
-  drawInfoPanel() {
+  drawInfoPanel(noteRange = null) {
     const panelHeight = 50;
     const y = this.height - panelHeight;
     
@@ -368,7 +439,7 @@ export class Visualizer {
     
     // Info text
     this.ctx.fillStyle = '#fff';
-    this.ctx.font = '14px sans-serif';
+    this.ctx.font = '12px sans-serif';
     this.ctx.textAlign = 'left';
     
     const bpm = 120; // Default BPM
@@ -376,10 +447,16 @@ export class Visualizer {
     const currentTime = this.formatTime(this.scrollPosition / (this.timelineWidthPx / this.timelineTotalDuration) * 1000 / 480);
     const totalTime = this.formatTime(this.timelineTotalDuration * 1000 / 480);
     
-    this.ctx.fillText(`BPM ${bpm}`, 10, y + 20);
-    this.ctx.fillText(`BEAT ${timeSignature}`, 80, y + 20);
-    this.ctx.fillText(`TIME ${currentTime} / ${totalTime}`, 10, y + 40);
-    this.ctx.fillText(`ZOOM ${(this.zoom * 100).toFixed(0)}%`, 200, y + 40);
+    this.ctx.fillText(`BPM ${bpm}`, 10, y + 15);
+    this.ctx.fillText(`BEAT ${timeSignature}`, 80, y + 15);
+    this.ctx.fillText(`TIME ${currentTime} / ${totalTime}`, 10, y + 35);
+    this.ctx.fillText(`ZOOM ${(this.zoom * 100).toFixed(0)}%`, 150, y + 35);
+    
+    if (noteRange) {
+      const lowNoteName = this.getNoteNameFromMIDI(noteRange.lowest);
+      const highNoteName = this.getNoteNameFromMIDI(noteRange.highest);
+      this.ctx.fillText(`RANGE ${lowNoteName}-${highNoteName} (${noteRange.count} keys)`, 250, y + 25);
+    }
   }
 
   /**
