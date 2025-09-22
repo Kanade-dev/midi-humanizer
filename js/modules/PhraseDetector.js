@@ -16,7 +16,7 @@ export class PhraseDetector {
    * Identify phrase boundaries in MIDI track
    * Enhanced with multiple detection strategies
    */
-  identifyPhraseBoundaries(track, isUserUpload = false) {
+  identifyPhraseBoundaries(track, isUserUpload = false, phraseDetectionMode = 'auto') {
     const notes = this.extractNotesFromTrack(track);
     const noteEvents = this.extractNoteEvents(track);
     
@@ -37,9 +37,142 @@ export class PhraseDetector {
       return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
     }
     
-    // Use reinforcement learning approach instead of grid-based analysis
-    console.log('🧠 Using reinforcement learning patterns for phrase detection (bypassing grid-based analysis)');
-    return this.detectPhrasesUsingReinforcementLearning(track, notes, noteEvents);
+    // Use different detection methods based on phraseDetectionMode
+    console.log(`🧠 Using phrase detection mode: ${phraseDetectionMode}`);
+    return this.detectPhrasesUsingSelectedMethod(track, notes, noteEvents, phraseDetectionMode);
+  }
+
+  /**
+   * Detect phrases using selected method
+   */
+  detectPhrasesUsingSelectedMethod(track, notes, noteEvents, phraseDetectionMode) {
+    switch (phraseDetectionMode) {
+      case 'musical':
+        return this.detectPhrasesUsingMusicalStructure(track, notes, noteEvents);
+      case 'rest':
+        return this.detectPhrasesUsingRests(track, notes, noteEvents);
+      case 'harmonic':
+        return this.detectPhrasesUsingHarmony(track, notes, noteEvents);
+      case 'auto':
+      default:
+        return this.detectPhrasesUsingReinforcementLearning(track, notes, noteEvents);
+    }
+  }
+
+  /**
+   * Detect phrases focusing on musical structure (melodic peaks, contour changes)
+   */
+  detectPhrasesUsingMusicalStructure(track, notes, noteEvents) {
+    console.log('🎵 Using musical structure-focused phrase detection');
+    
+    if (notes.length === 0) return [];
+    
+    const totalDuration = Math.max(...notes.map(n => n.endTime)) - Math.min(...notes.map(n => n.startTime));
+    
+    // Focus on melodic peaks and contour changes
+    const melodicBoundaries = this.detectMelodicPeaksAndContourChanges(notes);
+    
+    // Create phrases from detected boundaries
+    const phrases = this.createPhrasesFromBoundaries(melodicBoundaries, notes, noteEvents);
+    
+    console.log('Musical structure phrase detection:', {
+      totalNotes: notes.length,
+      totalDuration: (totalDuration / 1000).toFixed(1) + 's',
+      melodicBoundaries: melodicBoundaries.length,
+      finalPhrases: phrases.length
+    });
+    
+    return this.applyMinimalPhraseCleaning(phrases);
+  }
+
+  /**
+   * Detect phrases focusing on rest periods
+   */
+  detectPhrasesUsingRests(track, notes, noteEvents) {
+    console.log('🎵 Using rest-focused phrase detection');
+    
+    if (notes.length === 0) return [];
+    
+    const totalDuration = Math.max(...notes.map(n => n.endTime)) - Math.min(...notes.map(n => n.startTime));
+    
+    // Focus heavily on rest-based boundaries
+    const restBoundaries = this.detectRestBoundaries(notes, totalDuration / notes.length * 1.5);
+    
+    // Create phrases from detected boundaries
+    const phrases = this.createPhrasesFromBoundaries(restBoundaries, notes, noteEvents);
+    
+    console.log('Rest-focused phrase detection:', {
+      totalNotes: notes.length,
+      totalDuration: (totalDuration / 1000).toFixed(1) + 's',
+      restBoundaries: restBoundaries.length,
+      finalPhrases: phrases.length
+    });
+    
+    return this.applyMinimalPhraseCleaning(phrases);
+  }
+
+  /**
+   * Detect phrases focusing on harmonic changes
+   */
+  detectPhrasesUsingHarmony(track, notes, noteEvents) {
+    console.log('🎵 Using harmony-focused phrase detection');
+    
+    if (notes.length === 0) return [];
+    
+    const totalDuration = Math.max(...notes.map(n => n.endTime)) - Math.min(...notes.map(n => n.startTime));
+    
+    // Focus on harmonic boundaries
+    const harmonicBoundaries = this.detectHarmonicBoundaries(notes);
+    
+    // Supplement with some musical boundaries for better structure
+    const musicalBoundaries = this.detectMusicalBoundaries(notes);
+    const combinedBoundaries = this.combineBoundaries(harmonicBoundaries, musicalBoundaries, [], notes);
+    
+    // Create phrases from detected boundaries
+    const phrases = this.createPhrasesFromBoundaries(combinedBoundaries, notes, noteEvents);
+    
+    console.log('Harmony-focused phrase detection:', {
+      totalNotes: notes.length,
+      totalDuration: (totalDuration / 1000).toFixed(1) + 's',
+      harmonicBoundaries: harmonicBoundaries.length,
+      musicalBoundaries: musicalBoundaries.length,
+      finalPhrases: phrases.length
+    });
+    
+    return this.applyMinimalPhraseCleaning(phrases);
+  }
+
+  /**
+   * Detect melodic peaks and contour changes
+   */
+  detectMelodicPeaksAndContourChanges(notes) {
+    const boundaries = [];
+    if (notes.length < 3) return boundaries;
+    
+    // Find melodic peaks (local maxima/minima)
+    for (let i = 1; i < notes.length - 1; i++) {
+      const prev = notes[i - 1];
+      const curr = notes[i];
+      const next = notes[i + 1];
+      
+      // Melodic peak (higher than neighbors)
+      if (curr.pitch > prev.pitch && curr.pitch > next.pitch) {
+        boundaries.push(curr.startTime);
+      }
+      
+      // Melodic valley (lower than neighbors)
+      if (curr.pitch < prev.pitch && curr.pitch < next.pitch) {
+        boundaries.push(curr.startTime);
+      }
+      
+      // Large pitch jumps (contour changes)
+      const pitchJump = Math.abs(curr.pitch - prev.pitch);
+      if (pitchJump >= 7) { // More than a fifth
+        boundaries.push(curr.startTime);
+      }
+    }
+    
+    return [...new Set(boundaries)].sort((a, b) => a - b);
   }
 
   /**
