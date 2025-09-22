@@ -191,24 +191,6 @@ class MIDIHumanizer {
       const indicator = document.createElement('div');
       indicator.className = 'playback-progress-indicator';
       
-      // **FIXED**: Progress should be independent of zoom level - the red bar tracks absolute timeline position
-      // When zoomed in, the bar may be off-screen if the progress is beyond the visible area
-      const absoluteProgress = progress * 100; // Progress as percentage of total timeline
-      
-      indicator.style.cssText = `
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        width: 3px;
-        background: linear-gradient(to bottom, #ff4444, #ff6666);
-        z-index: 1000;
-        box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
-        left: ${absoluteProgress}%;
-        pointer-events: none;
-        border-radius: 2px;
-        animation: pulseProgress 1.5s ease-in-out infinite;
-      `;
-      
       // Find the appropriate container based on what's currently playing
       let targetTrack = null;
       if (this.isPlayingOriginal) {
@@ -225,8 +207,75 @@ class MIDIHumanizer {
       }
       
       if (targetTrack) {
+        // **FIXED**: Calculate position relative to the actual container and respect zoom level
+        const containerRect = targetTrack.getBoundingClientRect();
+        const containerWidth = containerRect.width;
+        
+        // Account for zoom level if available
+        const zoomLevel = this.timelineZoom || 1;
+        const effectiveProgress = progress * zoomLevel;
+        
+        // Clamp progress to container boundaries and add smooth following
+        let adjustedProgress = effectiveProgress;
+        
+        // If zoomed in and progress goes beyond visible area, scroll to follow
+        if (zoomLevel > 1 && effectiveProgress > 1) {
+          // Calculate how much to offset the view to keep the red bar visible
+          const viewportProgress = progress; // Keep bar at a reasonable position in viewport
+          adjustedProgress = Math.min(viewportProgress * 100, 95); // Keep within 95% of container
+          
+          // Smoothly scroll container to follow playback
+          this.smoothScrollToProgress(targetTrack, progress, zoomLevel);
+        } else {
+          adjustedProgress = Math.min(effectiveProgress * 100, 98); // Keep within container
+        }
+        
+        indicator.style.cssText = `
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          width: 3px;
+          background: linear-gradient(to bottom, #ff4444, #ff6666);
+          z-index: 1000;
+          box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
+          left: ${adjustedProgress}%;
+          pointer-events: none;
+          border-radius: 2px;
+          animation: pulseProgress 1.5s ease-in-out infinite;
+          transition: left 0.05s linear;
+        `;
+        
         targetTrack.style.position = 'relative';
+        targetTrack.style.overflow = 'hidden'; // Ensure red bar doesn't overflow
         targetTrack.appendChild(indicator);
+      }
+    }
+  }
+
+  // Smooth scroll function to follow playback progress when zoomed
+  smoothScrollToProgress(container, progress, zoomLevel) {
+    if (zoomLevel <= 1) return; // No need to scroll if not zoomed
+    
+    const parent = container.closest('.midi-visualization, .visualizationCanvas') || container.parentElement;
+    if (!parent) return;
+    
+    // Calculate how much to scroll to keep progress bar in view
+    const containerWidth = container.getBoundingClientRect().width;
+    const viewportWidth = parent.getBoundingClientRect().width;
+    
+    if (containerWidth > viewportWidth) {
+      // Calculate scroll position to center the progress bar
+      const progressPosition = progress * containerWidth;
+      const targetScrollLeft = Math.max(0, progressPosition - viewportWidth / 2);
+      
+      // Smooth scroll
+      if (parent.scrollTo) {
+        parent.scrollTo({
+          left: targetScrollLeft,
+          behavior: 'smooth'
+        });
+      } else {
+        parent.scrollLeft = targetScrollLeft;
       }
     }
   }
@@ -1041,39 +1090,28 @@ class MIDIHumanizer {
     const notes = this.extractNotesFromTrack(track);
     if (notes.length < 6) return [{ start: 0, end: notes[notes.length - 1]?.endTime || 0, notes: noteEvents }];
     
-    // Skip marker detection for user-uploaded files (they won't have training markers)
-    if (!isUserUpload) {
-      // Check if this is a training file with phrase markers (C6/B5)
-      const trainingAnalysis = this.analyzeTrainingPhrases(track, notes);
-      
-      if (trainingAnalysis && trainingAnalysis.markerCount > 0) {
-        console.log('🎵 Using training data for phrase detection - Enhanced analysis mode activated');
-        console.log('Training markers found:', {
-          phraseBoundaries: trainingAnalysis.markerCount,
-          strongNuanceMarkers: trainingAnalysis.strongNuanceFeatures?.length || 0,
-          regularNuanceMarkers: trainingAnalysis.nuanceFeatures?.length || 0
-        });
-        return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
-      }
-    } else {
-      console.log('🎯 User-uploaded file: Skipping marker detection');
+    // For user-uploaded files, skip marker detection completely and use reinforcement learning approach
+    if (isUserUpload) {
+      console.log('🎯 User-uploaded file: Using reinforcement learning patterns for phrase detection');
+      return this.detectPhrasesUsingReinforcementLearning(track, notes, noteEvents);
     }
     
-    // **NEW**: If we have learned patterns from previous training data, prefer using them over grid-based detection
-    if (this.learnedPatterns && this.learnedPatterns.phraseBoundaryFeatures.length > 0) {
-      console.log('🧠 Using learned patterns for phrase detection (bypassing grid-based analysis)');
-      console.log('Learned pattern database:', {
-        phraseBoundaryFeatures: this.learnedPatterns.phraseBoundaryFeatures.length,
-        strongNuanceFeatures: this.learnedPatterns.strongNuanceFeatures.length,
-        nuanceFeatures: this.learnedPatterns.nuanceFeatures.length,
-        comprehensivePatterns: Object.keys(this.learnedPatterns.comprehensivePatterns || {}).length > 0
+    // For training files, check for markers but also skip if no markers found
+    const trainingAnalysis = this.analyzeTrainingPhrases(track, notes);
+    
+    if (trainingAnalysis && trainingAnalysis.markerCount > 0) {
+      console.log('🎵 Using training data for phrase detection - Enhanced analysis mode activated');
+      console.log('Training markers found:', {
+        phraseBoundaries: trainingAnalysis.markerCount,
+        strongNuanceMarkers: trainingAnalysis.strongNuanceFeatures?.length || 0,
+        regularNuanceMarkers: trainingAnalysis.nuanceFeatures?.length || 0
       });
-      return this.detectPhrasesUsingLearnedPatterns(track, notes, noteEvents);
+      return this.detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis);
     }
     
-    // Use enhanced grid-aware phrase detection for regular files as fallback
-    console.log('📊 Using grid-based analysis (no training data available)');
-    return this.detectPhrasesWithGrid(track, notes, noteEvents);
+    // **UPDATED**: Always use reinforcement learning approach instead of grid-based analysis
+    console.log('🧠 Using reinforcement learning patterns for phrase detection (bypassing grid-based analysis)');
+    return this.detectPhrasesUsingReinforcementLearning(track, notes, noteEvents);
   }
 
   detectPhrasesFromTrainingData(track, notes, noteEvents, trainingAnalysis) {
@@ -1350,6 +1388,189 @@ class MIDIHumanizer {
       originalPhrases: phrases.length,
       afterMerging: result.length,
       veryShortThreshold: veryShortThreshold
+    });
+    
+    return result;
+  }
+
+  // **NEW**: Reinforcement learning-based phrase detection that prioritizes musical content over rigid grid analysis
+  detectPhrasesUsingReinforcementLearning(track, notes, noteEvents) {
+    console.log('🧠 Applying reinforcement learning approach for phrase detection');
+    
+    // Use basic timing info without heavy grid constraints
+    const totalDuration = Math.max(...notes.map(n => n.endTime || n.startTime));
+    const totalNotes = notes.length;
+    
+    // Calculate natural musical boundaries based on content analysis
+    const musicalBoundaries = this.findNaturalMusicalBoundaries(notes);
+    
+    // Use rest analysis for phrase detection (more natural than grid-based)
+    const restBoundaries = this.findRestBasedBoundaries(notes);
+    
+    // Apply harmonic change detection
+    const harmonicBoundaries = this.findHarmonicChangeBoundaries(notes);
+    
+    // Combine all boundary types with intelligent weighting
+    const combinedBoundaries = this.combineAndWeightBoundaries(
+      musicalBoundaries,
+      restBoundaries, 
+      harmonicBoundaries,
+      notes
+    );
+    
+    console.log('Reinforcement learning phrase detection:', {
+      totalNotes: totalNotes,
+      totalDuration: (totalDuration / 1000).toFixed(1) + 's',
+      musicalBoundaries: musicalBoundaries.length,
+      restBoundaries: restBoundaries.length,
+      harmonicBoundaries: harmonicBoundaries.length,
+      finalBoundaries: combinedBoundaries.length,
+      expectedPhrases: combinedBoundaries.length + 1
+    });
+    
+    // Create phrases from detected boundaries
+    const phrases = this.createPhrasesFromBoundaries(combinedBoundaries, notes, noteEvents);
+    
+    // Apply minimal post-processing to avoid over-regularization
+    return this.applyMinimalPhraseCleaning(phrases);
+  }
+
+  // Find natural musical boundaries based on content analysis
+  findNaturalMusicalBoundaries(notes) {
+    const boundaries = [];
+    
+    for (let i = 1; i < notes.length - 1; i++) {
+      const prev = notes[i - 1];
+      const curr = notes[i];
+      const next = notes[i + 1];
+      
+      // Detect significant pitch jumps (likely phrase transitions)
+      const pitchJump = Math.abs(curr.pitch - prev.pitch);
+      if (pitchJump >= 12) { // Octave or larger jump
+        boundaries.push(curr.startTime);
+        continue;
+      }
+      
+      // Detect significant timing changes
+      const prevGap = curr.startTime - prev.startTime;
+      const nextGap = next.startTime - curr.startTime;
+      if (prevGap > 0 && nextGap > 0) {
+        const gapRatio = Math.max(prevGap, nextGap) / Math.min(prevGap, nextGap);
+        if (gapRatio >= 2.5) { // Significant timing change
+          boundaries.push(curr.startTime);
+        }
+      }
+    }
+    
+    return boundaries.sort((a, b) => a - b);
+  }
+
+  // Find boundaries based on rest/silence analysis
+  findRestBasedBoundaries(notes) {
+    const boundaries = [];
+    const significantRestThreshold = 240; // Quarter note rest at 120 BPM
+    
+    for (let i = 1; i < notes.length; i++) {
+      const prev = notes[i - 1];
+      const curr = notes[i];
+      
+      const restDuration = curr.startTime - (prev.endTime || prev.startTime);
+      
+      if (restDuration >= significantRestThreshold) {
+        boundaries.push(curr.startTime);
+      }
+    }
+    
+    return boundaries.sort((a, b) => a - b);
+  }
+
+  // Find boundaries based on harmonic/melodic content changes
+  findHarmonicChangeBoundaries(notes) {
+    const boundaries = [];
+    const windowSize = 4; // Look at groups of 4 notes
+    
+    for (let i = windowSize; i < notes.length - windowSize; i++) {
+      const prevWindow = notes.slice(i - windowSize, i);
+      const nextWindow = notes.slice(i, i + windowSize);
+      
+      // Calculate average pitch for each window
+      const prevAvg = prevWindow.reduce((sum, n) => sum + n.pitch, 0) / prevWindow.length;
+      const nextAvg = nextWindow.reduce((sum, n) => sum + n.pitch, 0) / nextWindow.length;
+      
+      // Detect significant harmonic shift
+      if (Math.abs(nextAvg - prevAvg) >= 6) { // Half-octave shift
+        boundaries.push(notes[i].startTime);
+      }
+    }
+    
+    return boundaries.sort((a, b) => a - b);
+  }
+
+  // Combine and intelligently weight different boundary types
+  combineAndWeightBoundaries(musicalBoundaries, restBoundaries, harmonicBoundaries, notes) {
+    const allBoundaries = new Map();
+    
+    // Add musical boundaries with weight
+    musicalBoundaries.forEach(time => {
+      allBoundaries.set(time, (allBoundaries.get(time) || 0) + 1.0);
+    });
+    
+    // Add rest boundaries with higher weight (more reliable)
+    restBoundaries.forEach(time => {
+      allBoundaries.set(time, (allBoundaries.get(time) || 0) + 1.5);
+    });
+    
+    // Add harmonic boundaries with moderate weight
+    harmonicBoundaries.forEach(time => {
+      allBoundaries.set(time, (allBoundaries.get(time) || 0) + 0.8);
+    });
+    
+    // Filter boundaries by weight and ensure minimum phrase length
+    const minPhraseLength = 480; // Half note at 120 BPM
+    const weightedBoundaries = Array.from(allBoundaries.entries())
+      .filter(([time, weight]) => weight >= 1.2) // Require some confidence
+      .sort(([a], [b]) => a - b)
+      .map(([time]) => time);
+    
+    // Ensure minimum distance between boundaries
+    const finalBoundaries = [];
+    let lastBoundary = 0;
+    
+    for (const boundary of weightedBoundaries) {
+      if (boundary - lastBoundary >= minPhraseLength) {
+        finalBoundaries.push(boundary);
+        lastBoundary = boundary;
+      }
+    }
+    
+    return finalBoundaries;
+  }
+
+  // Apply minimal cleaning to avoid over-processing
+  applyMinimalPhraseCleaning(phrases) {
+    // Only merge extremely short phrases (less than 0.5 seconds)
+    const minPhraseDuration = 500; // 0.5 seconds in milliseconds
+    const result = [];
+    
+    for (let i = 0; i < phrases.length; i++) {
+      const phrase = phrases[i];
+      const phraseDuration = phrase.end - phrase.start;
+      
+      if (phraseDuration < minPhraseDuration && result.length > 0) {
+        // Merge with previous phrase
+        const previous = result[result.length - 1];
+        previous.end = phrase.end;
+        previous.notes = previous.notes.concat(phrase.notes);
+      } else {
+        result.push(phrase);
+      }
+    }
+    
+    console.log('Minimal phrase cleaning:', {
+      originalPhrases: phrases.length,
+      afterCleaning: result.length,
+      averageDuration: result.length > 0 ? 
+        (result.reduce((sum, p) => sum + (p.end - p.start), 0) / result.length / 1000).toFixed(1) + 's' : '0s'
     });
     
     return result;
