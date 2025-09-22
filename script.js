@@ -178,76 +178,83 @@ class MIDIHumanizer {
   }
 
   updateVisualizationProgress(progress) {
-    // Find or create progress indicator in visualization
+    // PicoTune-inspired progress tracking with proper viewport following
     const canvas = document.getElementById('visualizationCanvas');
     if (!canvas) return;
     
-    const existingIndicator = canvas.querySelector('.playback-progress-indicator');
+    // Remove existing progress indicator
+    const existingIndicator = canvas.querySelector('.picotime-progress-indicator');
     if (existingIndicator) {
       existingIndicator.remove();
     }
     
     if (progress > 0 && this.isPlaying) {
-      const indicator = document.createElement('div');
-      indicator.className = 'playback-progress-indicator';
+      // Find the timeline content area
+      const timelineContent = canvas.querySelector('.picotime-content');
+      const viewport = canvas.querySelector('.picotime-viewport');
       
-      // Find the appropriate container based on what's currently playing
-      let targetTrack = null;
-      if (this.isPlayingOriginal) {
-        // Find the original track (first timeline-track)
-        targetTrack = canvas.querySelector('.timeline-track:first-of-type .timeline-bar, .timeline-track .timeline-notes');
-      } else if (this.isPlayingHumanized) {
-        // Find the humanized track (second timeline-track)  
-        targetTrack = canvas.querySelector('.timeline-track:last-of-type .timeline-bar, .timeline-track:last-of-type .timeline-notes');
-      }
-      
-      if (!targetTrack) {
-        // Fallback to any timeline container
-        targetTrack = canvas.querySelector('.timeline-track, .phrase-visualization, .phrase-blocks, .timeline-content');
-      }
-      
-      if (targetTrack) {
-        // **FIXED**: Calculate position relative to the actual container and respect zoom level
-        const containerRect = targetTrack.getBoundingClientRect();
-        const containerWidth = containerRect.width;
+      if (timelineContent && viewport && this.timelineTotalDuration && this.timelineWidthPx) {
+        // Calculate exact pixel position based on time progress
+        const timeElapsed = progress * this.timelineTotalDuration; // milliseconds
+        const pixelPosition = (timeElapsed / this.timelineTotalDuration) * this.timelineWidthPx;
         
-        // Account for zoom level if available
-        const zoomLevel = this.timelineZoom || 1;
-        const effectiveProgress = progress * zoomLevel;
-        
-        // Clamp progress to container boundaries and add smooth following
-        let adjustedProgress = effectiveProgress;
-        
-        // If zoomed in and progress goes beyond visible area, scroll to follow
-        if (zoomLevel > 1 && effectiveProgress > 1) {
-          // Calculate how much to offset the view to keep the red bar visible
-          const viewportProgress = progress; // Keep bar at a reasonable position in viewport
-          adjustedProgress = Math.min(viewportProgress * 100, 95); // Keep within 95% of container
-          
-          // Smoothly scroll container to follow playback
-          this.smoothScrollToProgress(targetTrack, progress, zoomLevel);
-        } else {
-          adjustedProgress = Math.min(effectiveProgress * 100, 98); // Keep within container
-        }
-        
+        // Create progress indicator
+        const indicator = document.createElement('div');
+        indicator.className = 'picotime-progress-indicator';
         indicator.style.cssText = `
           position: absolute;
           top: 0;
           bottom: 0;
           width: 3px;
-          background: linear-gradient(to bottom, #ff4444, #ff6666);
+          left: ${pixelPosition}px;
+          background: linear-gradient(to bottom, #ff4444 0%, #ff6666 50%, #ff4444 100%);
+          box-shadow: 
+            0 0 8px rgba(255, 68, 68, 0.8), 
+            0 0 16px rgba(255, 68, 68, 0.4),
+            inset 0 0 3px rgba(255, 255, 255, 0.3);
           z-index: 1000;
-          box-shadow: 0 0 12px rgba(255, 68, 68, 0.8), 0 0 24px rgba(255, 68, 68, 0.4);
-          left: ${adjustedProgress}%;
-          pointer-events: none;
           border-radius: 2px;
-          animation: pulseProgress 1.5s ease-in-out infinite;
+          pointer-events: none;
+          animation: picoProgressPulse 1.5s ease-in-out infinite;
           transition: left 0.05s linear;
         `;
         
-        targetTrack.style.position = 'relative';
-        targetTrack.style.overflow = 'hidden'; // Ensure red bar doesn't overflow
-        targetTrack.appendChild(indicator);
+        timelineContent.appendChild(indicator);
+        
+        // Smooth viewport following when zoomed
+        this.followProgressInViewport(viewport, pixelPosition, this.timelineWidthPx);
+      }
+    }
+  }
+  
+  // PicoTune-inspired viewport following
+  followProgressInViewport(viewport, progressPx, totalWidthPx) {
+    if (!viewport) return;
+    
+    const viewportWidth = viewport.clientWidth;
+    const currentScrollLeft = viewport.scrollLeft;
+    
+    // Only follow if timeline is wider than viewport (i.e., zoomed)
+    if (totalWidthPx > viewportWidth) {
+      // Calculate the ideal scroll position to keep progress bar centered
+      const idealScrollLeft = progressPx - (viewportWidth / 2);
+      
+      // Apply bounds - don't scroll beyond the timeline
+      const maxScrollLeft = totalWidthPx - viewportWidth;
+      const targetScrollLeft = Math.max(0, Math.min(maxScrollLeft, idealScrollLeft));
+      
+      // Only scroll if the progress bar would be near the edge or outside viewport
+      const progressViewportPosition = progressPx - currentScrollLeft;
+      const edgeThreshold = viewportWidth * 0.2; // Start following when within 20% of edges
+      
+      if (progressViewportPosition < edgeThreshold || 
+          progressViewportPosition > viewportWidth - edgeThreshold) {
+        
+        // Smooth scroll to keep progress in view
+        viewport.scrollTo({
+          left: targetScrollLeft,
+          behavior: 'smooth'
+        });
       }
     }
   }
@@ -4219,13 +4226,16 @@ class MIDIHumanizer {
       humanizedNotes.length > 0 ? Math.max(...humanizedNotes.map(n => n.endTime)) : 0
     ) || 1000; // Default 1 second if no notes
     
-    // Initialize zoom if not set - default to 500% zoom for better visibility
-    if (!this.timelineZoom) this.timelineZoom = 5;
-    const zoomedWidth = 100 * this.timelineZoom; // Base width percentage times zoom
+    // Initialize zoom if not set - default to 100% zoom for better initial view
+    if (!this.timelineZoom) this.timelineZoom = 1;
+    
+    // PicoTune-inspired approach: Calculate actual pixel width based on duration and zoom
+    const basePixelsPerSecond = 100; // Base scale: 100 pixels per second
+    const timelineWidthPx = Math.max(600, (totalDuration / 1000) * basePixelsPerSecond * this.timelineZoom);
     
     canvas.innerHTML = `
-      <div class="integrated-timeline">
-        <h4>MIDI タイムライン表示（フレーズ構造統合）</h4>
+      <div class="picotime-timeline">
+        <h4>MIDI タイムライン表示（PicoTune風軽量版）</h4>
         <div class="timeline-controls" style="margin-bottom: 1rem;">
           <button onclick="midiHumanizer.adjustTimelineZoom(-0.5)" class="zoom-button" style="margin-right: 0.5rem; padding: 0.3rem 0.7rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer;">ズームアウト</button>
           <button onclick="midiHumanizer.adjustTimelineZoom(0.5)" class="zoom-button" style="margin-right: 0.5rem; padding: 0.3rem 0.7rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer;">ズームイン</button>
@@ -4237,101 +4247,197 @@ class MIDIHumanizer {
             <span>オリジナル: <strong>${originalNotes.length}</strong> ノート</span>
             <span>ヒューマナイズ後: <strong>${humanizedNotes.length}</strong> ノート</span>
             <span>フレーズ数: <strong>${phrases.length}</strong></span>
+            <span>長さ: <strong>${(totalDuration / 1000).toFixed(1)}</strong>秒</span>
           </div>
         </div>
-        <div class="timeline-container" style="overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 1rem;">
-          ${this.renderIntegratedTimelineContent(originalNotes, humanizedNotes, phrases, totalDuration, zoomedWidth)}
+        <div class="picotime-viewport" style="
+          position: relative; 
+          overflow-x: auto; 
+          overflow-y: hidden;
+          border: 2px solid var(--border); 
+          border-radius: var(--radius); 
+          background: #f8f9fa; 
+          height: 200px;
+          scroll-behavior: smooth;
+        " id="timeline-viewport">
+          ${this.renderPicoTimeContent(originalNotes, humanizedNotes, phrases, totalDuration, timelineWidthPx)}
+        </div>
+      </div>
+    `;
+    
+    // Store references for progress tracking
+    this.timelineViewport = document.getElementById('timeline-viewport');
+    this.timelineTotalDuration = totalDuration;
+    this.timelineWidthPx = timelineWidthPx;
+  }
+  
+  renderPicoTimeContent(originalNotes, humanizedNotes, phrases, totalDuration, widthPx) {
+    // PicoTune-inspired simple timeline rendering
+    return `
+      <div class="picotime-content" style="
+        position: relative; 
+        width: ${widthPx}px; 
+        height: 100%; 
+        background: linear-gradient(to bottom, #ffffff 0%, #f8f9fa 100%);
+        border-radius: 4px;
+      ">
+        <!-- Time grid background -->
+        ${this.renderTimeGrid(totalDuration, widthPx)}
+        
+        <!-- Phrase regions (subtle background) -->
+        <div class="phrase-layer" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 1;">
+          ${phrases.map((phrase, index) => {
+            const startPx = (phrase.start / totalDuration) * widthPx;
+            const widthPhrase = ((phrase.end - phrase.start) / totalDuration) * widthPx;
+            const colors = ['rgba(52, 152, 219, 0.08)', 'rgba(155, 89, 182, 0.08)', 'rgba(46, 204, 113, 0.08)', 'rgba(241, 196, 15, 0.08)'];
+            return `
+              <div style="
+                position: absolute; 
+                left: ${startPx}px; 
+                width: ${widthPhrase}px; 
+                height: 100%; 
+                background: ${colors[index % colors.length]}; 
+                border-left: 1px solid rgba(52, 152, 219, 0.2);
+              "></div>
+            `;
+          }).join('')}
+        </div>
+        
+        <!-- Original notes track -->
+        <div class="picotime-track" style="position: absolute; top: 20px; left: 8px; right: 8px; height: 30px; z-index: 2;">
+          <div class="track-label" style="position: absolute; top: -18px; left: 0; font-size: 0.75rem; font-weight: 600; color: #2c5aa0; z-index: 10;">
+            オリジナル
+          </div>
+          <div class="track-container" style="position: relative; height: 100%; background: rgba(44, 90, 160, 0.1); border-radius: 15px; border: 1px solid rgba(44, 90, 160, 0.3);">
+            ${originalNotes.map(note => {
+              const startPx = (note.startTime / totalDuration) * widthPx;
+              const noteDurationPx = Math.max(2, ((note.endTime - note.startTime) / totalDuration) * widthPx);
+              const intensity = note.velocity / 127;
+              const noteHeight = Math.max(3, 20 * intensity);
+              const noteTop = (30 - noteHeight) / 2;
+              return `
+                <div class="picotime-note" style="
+                  position: absolute; 
+                  left: ${startPx}px; 
+                  width: ${noteDurationPx}px; 
+                  height: ${noteHeight}px;
+                  top: ${noteTop}px;
+                  background: linear-gradient(135deg, 
+                    rgba(52, 152, 219, ${0.7 + intensity * 0.3}) 0%, 
+                    rgba(44, 90, 160, ${0.8 + intensity * 0.2}) 100%
+                  ); 
+                  border-radius: ${Math.min(noteDurationPx / 2, 10)}px;
+                  box-shadow: 0 1px 3px rgba(44, 90, 160, 0.3);
+                  transition: all 0.2s ease;
+                " 
+                onmouseover="this.style.transform='scale(1.1)'; this.style.zIndex='20';"
+                onmouseout="this.style.transform='scale(1)'; this.style.zIndex='auto';"
+                title="Velocity: ${note.velocity}, Time: ${(note.startTime/1000).toFixed(2)}s"
+                ></div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        
+        <!-- Humanized notes track -->
+        <div class="picotime-track" style="position: absolute; top: 70px; left: 8px; right: 8px; height: 30px; z-index: 2;">
+          <div class="track-label" style="position: absolute; top: -18px; left: 0; font-size: 0.75rem; font-weight: 600; color: #c0392b; z-index: 10;">
+            ヒューマナイズ後
+          </div>
+          <div class="track-container" style="position: relative; height: 100%; background: rgba(192, 57, 43, 0.1); border-radius: 15px; border: 1px solid rgba(192, 57, 43, 0.3);">
+            ${humanizedNotes.map(note => {
+              const startPx = (note.startTime / totalDuration) * widthPx;
+              const noteDurationPx = Math.max(2, ((note.endTime - note.startTime) / totalDuration) * widthPx);
+              const intensity = note.velocity / 127;
+              const noteHeight = Math.max(3, 20 * intensity);
+              const noteTop = (30 - noteHeight) / 2;
+              return `
+                <div class="picotime-note" style="
+                  position: absolute; 
+                  left: ${startPx}px; 
+                  width: ${noteDurationPx}px; 
+                  height: ${noteHeight}px;
+                  top: ${noteTop}px;
+                  background: linear-gradient(135deg, 
+                    rgba(231, 76, 60, ${0.7 + intensity * 0.3}) 0%, 
+                    rgba(192, 57, 43, ${0.8 + intensity * 0.2}) 100%
+                  ); 
+                  border-radius: ${Math.min(noteDurationPx / 2, 10)}px;
+                  box-shadow: 0 1px 3px rgba(192, 57, 43, 0.3);
+                  transition: all 0.2s ease;
+                " 
+                onmouseover="this.style.transform='scale(1.1)'; this.style.zIndex='20';"
+                onmouseout="this.style.transform='scale(1)'; this.style.zIndex='auto';"
+                title="Velocity: ${note.velocity}, Time: ${(note.startTime/1000).toFixed(2)}s"
+                ></div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        
+        <!-- Time ruler at bottom -->
+        <div class="time-ruler" style="position: absolute; bottom: 0; left: 0; right: 0; height: 40px; z-index: 1;">
+          ${this.renderTimeRuler(totalDuration, widthPx)}
         </div>
       </div>
     `;
   }
   
-  renderIntegratedTimelineContent(originalNotes, humanizedNotes, phrases, totalDuration, width) {
-    return `
-      <div class="timeline-content" style="position: relative; width: ${width}%; min-width: 600px;">
-        <!-- Phrase boundaries background -->
-        <div class="phrase-boundaries" style="position: absolute; top: 0; left: 0; right: 0; height: 120px; z-index: 1;">
-          ${phrases.map((phrase, index) => {
-            const startPercent = (phrase.start / totalDuration) * 100;
-            const widthPercent = ((phrase.end - phrase.start) / totalDuration) * 100;
-            const colors = ['rgba(52, 152, 219, 0.1)', 'rgba(155, 89, 182, 0.1)', 'rgba(46, 204, 113, 0.1)', 'rgba(241, 196, 15, 0.1)'];
-            const borderColors = ['rgba(52, 152, 219, 0.5)', 'rgba(155, 89, 182, 0.5)', 'rgba(46, 204, 113, 0.5)', 'rgba(241, 196, 15, 0.5)'];
-            return `
-              <div class="phrase-region" style="
-                position: absolute; 
-                left: ${startPercent}%; 
-                width: ${widthPercent}%; 
-                height: 100%; 
-                background: ${colors[index % colors.length]}; 
-                border-left: 2px solid ${borderColors[index % borderColors.length]};
-                border-right: 1px dashed ${borderColors[index % borderColors.length]};
-              ">
-                <div style="position: absolute; top: -18px; left: 2px; font-size: 0.8rem; font-weight: 600; color: var(--text); background: white; padding: 0.1rem 0.3rem; border-radius: 2px;">
-                  フレーズ${index + 1}
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-        
-        <!-- Original track -->
-        <div class="timeline-track" style="position: relative; margin: 1.5rem 0; z-index: 2;">
-          <div class="timeline-label" style="font-weight: 600; margin-bottom: 0.5rem;">オリジナル</div>
-          <div class="timeline-bar" style="position: relative; background: #f0f0f0; height: 20px; border-radius: 10px;">
-            ${originalNotes.map(note => {
-              const startPercent = (note.startTime / totalDuration) * 100;
-              const widthPercent = Math.max(0.5, ((note.endTime - note.startTime) / totalDuration) * 100);
-              const intensity = note.velocity / 127;
-              return `
-                <div class="note-block" style="
-                  position: absolute; 
-                  left: ${startPercent}%; 
-                  width: ${widthPercent}%; 
-                  height: 100%; 
-                  background: linear-gradient(90deg, 
-                    rgba(52, 152, 219, ${0.3 + intensity * 0.5}) 0%, 
-                    rgba(52, 152, 219, ${0.5 + intensity * 0.5}) 100%
-                  ); 
-                  border-radius: 10px;
-                  border: 1px solid rgba(52, 152, 219, 0.8);
-                "></div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-        
-        <!-- Humanized track -->
-        <div class="timeline-track" style="position: relative; margin: 1.5rem 0; z-index: 2;">
-          <div class="timeline-label" style="font-weight: 600; margin-bottom: 0.5rem;">ヒューマナイズ後</div>
-          <div class="timeline-bar" style="position: relative; background: #f0f0f0; height: 20px; border-radius: 10px;">
-            ${humanizedNotes.map(note => {
-              const startPercent = (note.startTime / totalDuration) * 100;
-              const widthPercent = Math.max(0.5, ((note.endTime - note.startTime) / totalDuration) * 100);
-              const intensity = note.velocity / 127;
-              return `
-                <div class="note-block" style="
-                  position: absolute; 
-                  left: ${startPercent}%; 
-                  width: ${widthPercent}%; 
-                  height: 100%; 
-                  background: linear-gradient(90deg, 
-                    rgba(231, 76, 60, ${0.3 + intensity * 0.5}) 0%, 
-                    rgba(231, 76, 60, ${0.5 + intensity * 0.5}) 100%
-                  ); 
-                  border-radius: 10px;
-                  border: 1px solid rgba(231, 76, 60, 0.8);
-                "></div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-        
-        <!-- Time scale -->
-        <div class="time-scale" style="margin-top: 1rem; height: 20px; position: relative; border-top: 1px solid var(--border);">
-          ${this.generateTimeScale(totalDuration, width)}
-        </div>
-      </div>
-    `;
+  renderTimeGrid(totalDuration, widthPx) {
+    const gridLines = [];
+    const seconds = totalDuration / 1000;
+    const interval = seconds > 20 ? 5 : (seconds > 10 ? 2 : (seconds > 5 ? 1 : 0.5));
+    
+    for (let time = 0; time <= seconds; time += interval) {
+      const position = (time / seconds) * widthPx;
+      const isMainGrid = time % (interval * 2) === 0;
+      gridLines.push(`
+        <div style="
+          position: absolute; 
+          left: ${position}px; 
+          top: 0; 
+          bottom: 0; 
+          width: 1px; 
+          background: ${isMainGrid ? 'rgba(0,0,0,0.15)' : 'rgba(0,0,0,0.08)'}; 
+          z-index: 0;
+        "></div>
+      `);
+    }
+    
+    return gridLines.join('');
+  }
+  
+  renderTimeRuler(totalDuration, widthPx) {
+    const marks = [];
+    const seconds = totalDuration / 1000;
+    const interval = seconds > 20 ? 5 : (seconds > 10 ? 2 : (seconds > 5 ? 1 : 0.5));
+    
+    for (let time = 0; time <= seconds; time += interval) {
+      const position = (time / seconds) * widthPx;
+      marks.push(`
+        <div style="
+          position: absolute; 
+          left: ${position}px; 
+          top: 0; 
+          height: 8px; 
+          width: 1px; 
+          background: #666;
+          z-index: 2;
+        "></div>
+        <div style="
+          position: absolute; 
+          left: ${position - 15}px; 
+          top: 10px; 
+          width: 30px; 
+          text-align: center; 
+          font-size: 0.7rem; 
+          color: #666;
+          z-index: 2;
+        ">${time.toFixed(1)}s</div>
+      `);
+    }
+    
+    return marks.join('');
   }
   
   generateTimeScale(totalDuration, width) {
@@ -4359,7 +4465,7 @@ class MIDIHumanizer {
   }
   
   resetTimelineZoom() {
-    this.timelineZoom = 5; // Reset to 500% for better visibility
+    this.timelineZoom = 1; // Reset to 100% for better initial view
     if (this.currentVisualizationMode === 'timeline') {
       this.renderLightweightTimeline();
     }
@@ -4439,7 +4545,7 @@ class MIDIHumanizer {
           ${this.renderNoteTimeline(originalNotes, phrases)}
         </div>
         <div class="timeline-ruler">
-          ${this.renderTimeRuler(originalNotes)}
+          ${this.renderTimeRuler(Math.max(...originalNotes.map(n => n.endTime)), canvas.clientWidth * this.zoomLevel)}
         </div>
         <div class="phrase-visualization">
           ${this.renderPhraseStructure(phrases, originalNotes)}
@@ -4623,7 +4729,8 @@ class MIDIHumanizer {
     if (this.currentVisualizationMode === 'phrases') {
       this.renderPhraseVisualization();
     } else {
-      this.renderTimelineVisualization();
+      // Use the new lightweight timeline for consistency
+      this.renderLightweightTimeline();
     }
   }
 
@@ -4633,29 +4740,9 @@ class MIDIHumanizer {
     if (this.currentVisualizationMode === 'phrases') {
       this.renderPhraseVisualization();
     } else {
-      this.renderTimelineVisualization();
+      // Use the new lightweight timeline for consistency
+      this.renderLightweightTimeline();
     }
-  }
-
-  renderTimeRuler(notes) {
-    if (notes.length === 0) return '';
-    
-    const maxTime = Math.max(...notes.map(n => n.endTime));
-    const secondsTotal = maxTime / 480; // Convert MIDI ticks to approximate seconds
-    const intervals = Math.min(10, Math.max(4, Math.floor(secondsTotal)));
-    
-    let html = '<div class="time-ruler">';
-    for (let i = 0; i <= intervals; i++) {
-      const percent = (i / intervals) * 100;
-      const timeLabel = ((secondsTotal * i) / intervals).toFixed(1);
-      html += `
-        <div class="time-marker" style="left: ${percent}%">
-          <div class="time-label">${timeLabel}s</div>
-        </div>
-      `;
-    }
-    html += '</div>';
-    return html;
   }
 
   renderPhraseStructure(phrases, notes) {
