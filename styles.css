@@ -513,3 +513,116 @@ button:active {
     transform: scaleX(1.2);
   }
 }
+
+/* Simple Timeline Styles - PicoTune inspired lightweight visualizer */
+.simple-timeline {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+}
+
+.simple-timeline h4 {
+  text-align: center;
+  color: var(--primary);
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.simple-timeline .timeline-info {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.simple-timeline .timeline-info strong {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.simple-timeline-container {
+  position: relative;
+  height: 160px;
+  background: linear-gradient(to bottom, #ffffff 0%, #f8fafc 100%);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.simple-timeline-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* Phrase regions with clear boundaries */
+.phrase-region {
+  transition: all 0.2s ease;
+}
+
+.phrase-region:hover {
+  opacity: 0.8;
+}
+
+.phrase-label {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: 0;
+}
+
+/* Simple notes styling */
+.simple-note {
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.simple-note:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+.simple-note.original {
+  /* Blue gradient for original notes */
+}
+
+.simple-note.humanized {
+  /* Red gradient for humanized notes */
+}
+
+/* Legend styling */
+.simple-legend {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Responsive adjustments for simple timeline */
+@media (max-width: 640px) {
+  .simple-timeline {
+    padding: 1rem;
+  }
+  
+  .simple-timeline .timeline-info {
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: center;
+  }
+  
+  .simple-timeline-container {
+    height: 120px;
+  }
+  
+  .phrase-label {
+    font-size: 0.6rem !important;
+    padding: 0 2px !important;
+  }
+  
+  .simple-legend {
+    font-size: 0.6rem !important;
+    padding: 2px 4px !important;
+  }
+}
