@@ -4131,7 +4131,7 @@ class MIDIHumanizer {
   
   // Zoom control methods
   adjustTimelineZoom(delta) {
-    this.timelineZoom = Math.max(0.5, Math.min(5, (this.timelineZoom || 1) + delta));
+    this.timelineZoom = Math.max(0.5, Math.min(10, (this.timelineZoom || 1) + delta));
     if (this.currentVisualizationMode === 'timeline') {
       this.renderLightweightTimeline();
     }
