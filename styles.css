@@ -513,3 +513,484 @@ button:active {
     transform: scaleX(1.2);
   }
 }
+
+/* PicoTune-style Piano Roll Interface */
+.picotune-piano-roll {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.picotune-piano-roll h4 {
+  text-align: center;
+  color: var(--primary);
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.piano-roll-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 0.5rem 1rem;
+  background: #f8f9fa;
+  border-radius: var(--radius);
+  border: 1px solid #e9ecef;
+}
+
+.bpm-info {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.bpm-label {
+  color: #dc3545;
+  background: rgba(220, 53, 69, 0.1);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.beat-info {
+  color: #28a745;
+  background: rgba(40, 167, 69, 0.1);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.time-info {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.current-time {
+  color: var(--primary);
+}
+
+.total-time {
+  color: var(--text-secondary);
+}
+
+/* Piano Roll Viewport */
+.piano-roll-container {
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  height: 600px;
+  overflow: hidden;
+  position: relative;
+}
+
+.piano-roll-viewport {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+
+/* Piano Keyboard */
+.piano-keyboard {
+  width: 80px;
+  background: #f8f9fa;
+  border-right: 2px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.piano-key {
+  display: flex;
+  align-items: center;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid #e9ecef;
+  font-size: 0.7rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.piano-key.white-key {
+  background: #fff;
+  color: #333;
+}
+
+.piano-key.black-key {
+  background: #333;
+  color: #fff;
+}
+
+.piano-key:hover {
+  background: var(--primary) !important;
+  color: white !important;
+}
+
+.key-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+/* Grid Container */
+.piano-roll-grid-container {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  background: #fafbfc;
+}
+
+/* Grid Background */
+.piano-roll-grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+}
+
+.grid-line {
+  position: absolute;
+  pointer-events: none;
+}
+
+.grid-line.vertical {
+  width: 1px;
+  height: 100%;
+  background: #e1e8ed;
+}
+
+.grid-line.vertical.main {
+  background: #cbd5de;
+  width: 2px;
+}
+
+.grid-line.horizontal {
+  width: 100%;
+  height: 1px;
+  background: #e1e8ed;
+}
+
+/* Notes Layers */
+.notes-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.piano-note {
+  position: absolute;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  pointer-events: auto;
+  min-height: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.piano-note.original {
+  background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+  z-index: 2;
+}
+
+.piano-note.humanized {
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+  z-index: 3;
+  opacity: 0.85;
+}
+
+.piano-note:hover {
+  transform: scaleY(1.2);
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(231, 76, 60, 0.6);
+}
+
+/* Phrase Boundaries */
+.phrase-boundaries-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.phrase-boundary-line {
+  position: absolute;
+  width: 2px;
+  background: rgba(52, 152, 219, 0.6);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.phrase-boundary-line.start {
+  background: rgba(46, 204, 113, 0.8);
+}
+
+.phrase-boundary-line.end {
+  background: rgba(231, 76, 60, 0.8);
+}
+
+.phrase-region-overlay {
+  position: absolute;
+  background: rgba(52, 152, 219, 0.05);
+  border-left: 1px solid rgba(52, 152, 219, 0.3);
+  border-right: 1px solid rgba(52, 152, 219, 0.3);
+  pointer-events: none;
+}
+
+/* Piano Roll Controls */
+.piano-roll-controls {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: var(--radius);
+  border: 1px solid #e9ecef;
+}
+
+.playback-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.control-btn {
+  background: #495057;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: all 0.2s ease;
+}
+
+.control-btn:hover {
+  background: #343a40;
+  transform: scale(1.1);
+}
+
+.control-btn.play-pause {
+  background: var(--primary);
+  width: 50px;
+  height: 50px;
+  font-size: 1.2rem;
+}
+
+.control-btn.play-pause:hover {
+  background: var(--primary-light);
+}
+
+.volume-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 1rem;
+}
+
+.volume-slider {
+  width: 80px;
+  height: 4px;
+  background: #e9ecef;
+  outline: none;
+  border-radius: 2px;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+/* No notes message */
+.no-notes {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Responsive adjustments for piano roll */
+@media (max-width: 640px) {
+  .picotune-piano-roll {
+    padding: 1rem;
+  }
+  
+  .piano-roll-info {
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: center;
+  }
+  
+  .piano-keyboard {
+    width: 60px;
+  }
+  
+  .key-label {
+    font-size: 0.6rem;
+  }
+  
+  .piano-roll-container {
+    height: 300px;
+  }
+  
+  .playback-controls {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  
+  .control-btn {
+    width: 35px;
+    height: 35px;
+    font-size: 0.9rem;
+  }
+  
+  .control-btn.play-pause {
+    width: 45px;
+    height: 45px;
+  }
+  
+  .volume-control {
+    margin-left: 0;
+    margin-top: 0.5rem;
+  }
+}
+
+/* Legacy styles for compatibility - to be removed */
+.simple-timeline {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+}
+
+.simple-timeline h4 {
+  text-align: center;
+  color: var(--primary);
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.simple-timeline .timeline-info {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.simple-timeline .timeline-info strong {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.simple-timeline-container {
+  position: relative;
+  height: 160px;
+  background: linear-gradient(to bottom, #ffffff 0%, #f8fafc 100%);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.simple-timeline-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* Phrase regions with clear boundaries */
+.phrase-region {
+  transition: all 0.2s ease;
+}
+
+.phrase-region:hover {
+  opacity: 0.8;
+}
+
+.phrase-label {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: 0;
+}
+
+/* Simple notes styling */
+.simple-note {
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.simple-note:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+.simple-note.original {
+  /* Blue gradient for original notes */
+}
+
+.simple-note.humanized {
+  /* Red gradient for humanized notes */
+}
+
+/* Legend styling */
+.simple-legend {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Responsive adjustments for simple timeline */
+@media (max-width: 640px) {
+  .simple-timeline {
+    padding: 1rem;
+  }
+  
+  .simple-timeline .timeline-info {
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: center;
+  }
+  
+  .simple-timeline-container {
+    height: 120px;
+  }
+  
+  .phrase-label {
+    font-size: 0.6rem !important;
+    padding: 0 2px !important;
+  }
+  
+  .simple-legend {
+    font-size: 0.6rem !important;
+    padding: 2px 4px !important;
+  }
+}

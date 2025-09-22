@@ -4220,167 +4220,225 @@ class MIDIHumanizer {
     const humanizedNotes = this.extractNotesFromMIDI(this.humanizedMidiData);
     const phrases = this.lastAnalysis?.tracks[0]?.phrasing || [];
     
-    // Calculate total duration and scale
+    // Calculate total duration
     const totalDuration = Math.max(
       originalNotes.length > 0 ? Math.max(...originalNotes.map(n => n.endTime)) : 0,
       humanizedNotes.length > 0 ? Math.max(...humanizedNotes.map(n => n.endTime)) : 0
     ) || 1000; // Default 1 second if no notes
     
-    // Initialize zoom if not set - default to 100% zoom for better initial view
-    if (!this.timelineZoom) this.timelineZoom = 1;
-    
-    // PicoTune-inspired approach: Calculate actual pixel width based on duration and zoom
-    const basePixelsPerSecond = 100; // Base scale: 100 pixels per second
-    const timelineWidthPx = Math.max(600, (totalDuration / 1000) * basePixelsPerSecond * this.timelineZoom);
-    
+    // PicoTune-style piano roll interface
     canvas.innerHTML = `
-      <div class="picotime-timeline">
-        <h4>MIDI タイムライン表示（PicoTune風軽量版）</h4>
-        <div class="timeline-controls" style="margin-bottom: 1rem;">
-          <button onclick="midiHumanizer.adjustTimelineZoom(-0.5)" class="zoom-button" style="margin-right: 0.5rem; padding: 0.3rem 0.7rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer;">ズームアウト</button>
-          <button onclick="midiHumanizer.adjustTimelineZoom(0.5)" class="zoom-button" style="margin-right: 0.5rem; padding: 0.3rem 0.7rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer;">ズームイン</button>
-          <button onclick="midiHumanizer.resetTimelineZoom()" class="zoom-button" style="padding: 0.3rem 0.7rem; background: var(--accent); color: white; border: none; border-radius: 4px; cursor: pointer;">リセット</button>
-          <span style="margin-left: 1rem; color: var(--text-light);">ズーム: ${(this.timelineZoom * 100).toFixed(0)}%</span>
-        </div>
-        <div class="timeline-info">
-          <div class="timeline-stats">
-            <span>オリジナル: <strong>${originalNotes.length}</strong> ノート</span>
-            <span>ヒューマナイズ後: <strong>${humanizedNotes.length}</strong> ノート</span>
-            <span>フレーズ数: <strong>${phrases.length}</strong></span>
-            <span>長さ: <strong>${(totalDuration / 1000).toFixed(1)}</strong>秒</span>
+      <div class="picotune-piano-roll">
+        <h4>PicoTune風MIDIビジュアライザー</h4>
+        <div class="piano-roll-info">
+          <div class="bpm-info">
+            <span class="bpm-label">BPM 120</span>
+            <span class="beat-info">BEAT 4/4</span>
+          </div>
+          <div class="time-info">
+            <span class="current-time">TIME 0:00</span>
+            <span class="total-time">/ ${this.formatTime(totalDuration)}</span>
           </div>
         </div>
-        <div class="picotime-viewport" style="
-          position: relative; 
-          overflow-x: auto; 
-          overflow-y: hidden;
-          border: 2px solid var(--border); 
-          border-radius: var(--radius); 
-          background: #f8f9fa; 
-          height: 200px;
-          scroll-behavior: smooth;
-        " id="timeline-viewport">
-          ${this.renderPicoTimeContent(originalNotes, humanizedNotes, phrases, totalDuration, timelineWidthPx)}
+        <div class="piano-roll-container">
+          ${this.renderPianoRoll(originalNotes, humanizedNotes, totalDuration)}
+        </div>
+        <div class="piano-roll-controls">
+          <div class="playback-controls">
+            <button class="control-btn" onclick="midiHumanizer.seekBackward()">⏮</button>
+            <button class="control-btn play-pause" onclick="midiHumanizer.togglePlayback()">⏸</button>
+            <button class="control-btn" onclick="midiHumanizer.seekForward()">⏭</button>
+            <button class="control-btn" onclick="midiHumanizer.downloadMIDI()">⬇</button>
+            <div class="volume-control">
+              <span>🔊</span>
+              <input type="range" min="0" max="100" value="80" class="volume-slider">
+            </div>
+          </div>
         </div>
       </div>
     `;
-    
-    // Store references for progress tracking
-    this.timelineViewport = document.getElementById('timeline-viewport');
-    this.timelineTotalDuration = totalDuration;
-    this.timelineWidthPx = timelineWidthPx;
   }
   
-  renderPicoTimeContent(originalNotes, humanizedNotes, phrases, totalDuration, widthPx) {
-    // PicoTune-inspired simple timeline rendering
+  renderPianoRoll(originalNotes, humanizedNotes, totalDuration) {
+    // Piano roll inspired by PicoTune interface
+    const allNotes = [...originalNotes, ...humanizedNotes];
+    if (allNotes.length === 0) return '<div class="no-notes">No notes to display</div>';
+    
+    // Calculate note range for piano keys
+    const minPitch = Math.min(...allNotes.map(n => n.pitch));
+    const maxPitch = Math.max(...allNotes.map(n => n.pitch));
+    const pitchRange = Math.max(24, maxPitch - minPitch + 12); // Show at least 2 octaves
+    
+    // Adjust range to include full octaves
+    const startPitch = Math.floor((minPitch - 6) / 12) * 12;
+    const endPitch = startPitch + Math.ceil(pitchRange / 12) * 12;
+    
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const noteHeight = 25; // Height of each note row in pixels (increased from 20)
+    const rollHeight = (endPitch - startPitch) * noteHeight;
+    
+    // Generate piano keys
+    const pianoKeys = [];
+    for (let pitch = endPitch - 1; pitch >= startPitch; pitch--) {
+      const noteName = noteNames[pitch % 12];
+      const octave = Math.floor(pitch / 12) - 1;
+      const isBlackKey = noteName.includes('#');
+      pianoKeys.push({
+        pitch,
+        name: noteName,
+        octave,
+        displayName: noteName + octave,
+        isBlackKey
+      });
+    }
+    
     return `
-      <div class="picotime-content" style="
-        position: relative; 
-        width: ${widthPx}px; 
-        height: 100%; 
-        background: linear-gradient(to bottom, #ffffff 0%, #f8f9fa 100%);
-        border-radius: 4px;
-      ">
-        <!-- Time grid background -->
-        ${this.renderTimeGrid(totalDuration, widthPx)}
-        
-        <!-- Phrase regions (subtle background) -->
-        <div class="phrase-layer" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 1;">
-          ${phrases.map((phrase, index) => {
-            const startPx = (phrase.start / totalDuration) * widthPx;
-            const widthPhrase = ((phrase.end - phrase.start) / totalDuration) * widthPx;
-            const colors = ['rgba(52, 152, 219, 0.08)', 'rgba(155, 89, 182, 0.08)', 'rgba(46, 204, 113, 0.08)', 'rgba(241, 196, 15, 0.08)'];
-            return `
-              <div style="
-                position: absolute; 
-                left: ${startPx}px; 
-                width: ${widthPhrase}px; 
-                height: 100%; 
-                background: ${colors[index % colors.length]}; 
-                border-left: 1px solid rgba(52, 152, 219, 0.2);
-              "></div>
-            `;
-          }).join('')}
+      <div class="piano-roll-viewport">
+        <!-- Piano keyboard on the left -->
+        <div class="piano-keyboard">
+          ${pianoKeys.map(key => `
+            <div class="piano-key ${key.isBlackKey ? 'black-key' : 'white-key'}" 
+                 style="height: ${noteHeight}px;"
+                 data-pitch="${key.pitch}">
+              <span class="key-label">${key.displayName}</span>
+            </div>
+          `).join('')}
         </div>
         
-        <!-- Original notes track -->
-        <div class="picotime-track" style="position: absolute; top: 20px; left: 8px; right: 8px; height: 30px; z-index: 2;">
-          <div class="track-label" style="position: absolute; top: -18px; left: 0; font-size: 0.75rem; font-weight: 600; color: #2c5aa0; z-index: 10;">
-            オリジナル
+        <!-- Grid and notes area -->
+        <div class="piano-roll-grid-container">
+          <!-- Background grid -->
+          <div class="piano-roll-grid" style="height: ${rollHeight}px;">
+            ${this.renderPianoRollGrid(totalDuration, rollHeight, noteHeight)}
           </div>
-          <div class="track-container" style="position: relative; height: 100%; background: rgba(44, 90, 160, 0.1); border-radius: 15px; border: 1px solid rgba(44, 90, 160, 0.3);">
-            ${originalNotes.map(note => {
-              const startPx = (note.startTime / totalDuration) * widthPx;
-              const noteDurationPx = Math.max(2, ((note.endTime - note.startTime) / totalDuration) * widthPx);
-              const intensity = note.velocity / 127;
-              const noteHeight = Math.max(3, 20 * intensity);
-              const noteTop = (30 - noteHeight) / 2;
-              return `
-                <div class="picotime-note" style="
-                  position: absolute; 
-                  left: ${startPx}px; 
-                  width: ${noteDurationPx}px; 
-                  height: ${noteHeight}px;
-                  top: ${noteTop}px;
-                  background: linear-gradient(135deg, 
-                    rgba(52, 152, 219, ${0.7 + intensity * 0.3}) 0%, 
-                    rgba(44, 90, 160, ${0.8 + intensity * 0.2}) 100%
-                  ); 
-                  border-radius: ${Math.min(noteDurationPx / 2, 10)}px;
-                  box-shadow: 0 1px 3px rgba(44, 90, 160, 0.3);
-                  transition: all 0.2s ease;
-                " 
-                onmouseover="this.style.transform='scale(1.1)'; this.style.zIndex='20';"
-                onmouseout="this.style.transform='scale(1)'; this.style.zIndex='auto';"
-                title="Velocity: ${note.velocity}, Time: ${(note.startTime/1000).toFixed(2)}s"
-                ></div>
-              `;
-            }).join('')}
+          
+          <!-- Original notes -->
+          <div class="notes-layer original-notes">
+            ${originalNotes.map(note => this.renderNote(note, startPitch, endPitch, totalDuration, noteHeight, 'original')).join('')}
           </div>
-        </div>
-        
-        <!-- Humanized notes track -->
-        <div class="picotime-track" style="position: absolute; top: 70px; left: 8px; right: 8px; height: 30px; z-index: 2;">
-          <div class="track-label" style="position: absolute; top: -18px; left: 0; font-size: 0.75rem; font-weight: 600; color: #c0392b; z-index: 10;">
-            ヒューマナイズ後
+          
+          <!-- Humanized notes -->
+          <div class="notes-layer humanized-notes">
+            ${humanizedNotes.map(note => this.renderNote(note, startPitch, endPitch, totalDuration, noteHeight, 'humanized')).join('')}
           </div>
-          <div class="track-container" style="position: relative; height: 100%; background: rgba(192, 57, 43, 0.1); border-radius: 15px; border: 1px solid rgba(192, 57, 43, 0.3);">
-            ${humanizedNotes.map(note => {
-              const startPx = (note.startTime / totalDuration) * widthPx;
-              const noteDurationPx = Math.max(2, ((note.endTime - note.startTime) / totalDuration) * widthPx);
-              const intensity = note.velocity / 127;
-              const noteHeight = Math.max(3, 20 * intensity);
-              const noteTop = (30 - noteHeight) / 2;
-              return `
-                <div class="picotime-note" style="
-                  position: absolute; 
-                  left: ${startPx}px; 
-                  width: ${noteDurationPx}px; 
-                  height: ${noteHeight}px;
-                  top: ${noteTop}px;
-                  background: linear-gradient(135deg, 
-                    rgba(231, 76, 60, ${0.7 + intensity * 0.3}) 0%, 
-                    rgba(192, 57, 43, ${0.8 + intensity * 0.2}) 100%
-                  ); 
-                  border-radius: ${Math.min(noteDurationPx / 2, 10)}px;
-                  box-shadow: 0 1px 3px rgba(192, 57, 43, 0.3);
-                  transition: all 0.2s ease;
-                " 
-                onmouseover="this.style.transform='scale(1.1)'; this.style.zIndex='20';"
-                onmouseout="this.style.transform='scale(1)'; this.style.zIndex='auto';"
-                title="Velocity: ${note.velocity}, Time: ${(note.startTime/1000).toFixed(2)}s"
-                ></div>
-              `;
-            }).join('')}
+          
+          <!-- Phrase boundaries -->
+          <div class="phrase-boundaries-layer">
+            ${this.renderPhraseBoundaries(this.lastAnalysis?.tracks[0]?.phrasing || [], totalDuration, rollHeight)}
           </div>
-        </div>
-        
-        <!-- Time ruler at bottom -->
-        <div class="time-ruler" style="position: absolute; bottom: 0; left: 0; right: 0; height: 40px; z-index: 1;">
-          ${this.renderTimeRuler(totalDuration, widthPx)}
         </div>
       </div>
     `;
+  }
+  
+  renderPianoRollGrid(totalDuration, rollHeight, noteHeight) {
+    const seconds = totalDuration / 1000;
+    const gridLines = [];
+    
+    // Vertical time grid lines (every 0.5 seconds)
+    for (let time = 0; time <= seconds; time += 0.5) {
+      const position = (time / seconds) * 100;
+      const isMainGrid = time % 2 === 0;
+      gridLines.push(`
+        <div class="grid-line vertical ${isMainGrid ? 'main' : 'sub'}" 
+             style="left: ${position}%;">
+        </div>
+      `);
+    }
+    
+    // Horizontal note grid lines
+    const numRows = rollHeight / noteHeight;
+    for (let i = 0; i <= numRows; i++) {
+      const position = (i / numRows) * 100;
+      gridLines.push(`
+        <div class="grid-line horizontal" style="top: ${position}%;"></div>
+      `);
+    }
+    
+    return gridLines.join('');
+  }
+  
+  renderNote(note, startPitch, endPitch, totalDuration, noteHeight, type) {
+    const leftPos = (note.startTime / totalDuration) * 100;
+    const width = Math.max(0.5, ((note.endTime - note.startTime) / totalDuration) * 100);
+    const noteRow = endPitch - 1 - note.pitch;
+    const topPos = (noteRow / (endPitch - startPitch)) * 100;
+    const velocity = note.velocity / 127;
+    
+    return `
+      <div class="piano-note ${type}" 
+           style="
+             left: ${leftPos}%; 
+             width: ${width}%; 
+             top: ${topPos}%; 
+             height: ${(1 / (endPitch - startPitch)) * 100}%;
+             opacity: ${0.7 + velocity * 0.3};
+           "
+           title="${this.getNoteDisplayName(note.pitch)} - Velocity: ${note.velocity} - Duration: ${((note.endTime - note.startTime) / 1000).toFixed(2)}s"
+           data-pitch="${note.pitch}"
+           data-start="${note.startTime}"
+           data-end="${note.endTime}">
+      </div>
+    `;
+  }
+  
+  renderPhraseBoundaries(phrases, totalDuration, rollHeight) {
+    if (!phrases || phrases.length === 0) return '';
+    
+    return phrases.map((phrase, index) => {
+      const startPos = (phrase.start / totalDuration) * 100;
+      const endPos = (phrase.end / totalDuration) * 100;
+      
+      return `
+        <div class="phrase-boundary-line start" 
+             style="left: ${startPos}%; height: 100%;"
+             title="フレーズ ${index + 1} 開始">
+        </div>
+        <div class="phrase-boundary-line end" 
+             style="left: ${endPos}%; height: 100%;"
+             title="フレーズ ${index + 1} 終了">
+        </div>
+        <div class="phrase-region-overlay" 
+             style="left: ${startPos}%; width: ${endPos - startPos}%; height: 100%;"
+             title="フレーズ ${index + 1}">
+        </div>
+      `;
+    }).join('');
+  }
+  
+  getNoteDisplayName(pitch) {
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const noteName = noteNames[pitch % 12];
+    const octave = Math.floor(pitch / 12) - 1;
+    return noteName + octave;
+  }
+  
+  formatTime(timeMs) {
+    const seconds = Math.floor(timeMs / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+  }
+  
+  // Placeholder methods for controls
+  seekBackward() {
+    console.log('Seek backward');
+  }
+  
+  togglePlayback() {
+    console.log('Toggle playback');
+  }
+  
+  seekForward() {
+    console.log('Seek forward');
+  }
+  
+  downloadMIDI() {
+    // Trigger existing download functionality
+    const downloadLink = document.querySelector('a[href^="blob:"]');
+    if (downloadLink) {
+      downloadLink.click();
+    }
   }
   
   renderTimeGrid(totalDuration, widthPx) {
@@ -4456,19 +4514,15 @@ class MIDIHumanizer {
     return marks.join('');
   }
   
-  // Zoom control methods
+  // Zoom control methods - removed for simplified interface
   adjustTimelineZoom(delta) {
-    this.timelineZoom = Math.max(0.5, Math.min(10, (this.timelineZoom || 1) + delta));
-    if (this.currentVisualizationMode === 'timeline') {
-      this.renderLightweightTimeline();
-    }
+    // Simplified: no zoom controls needed for lightweight visualizer
+    return;
   }
   
   resetTimelineZoom() {
-    this.timelineZoom = 1; // Reset to 100% for better initial view
-    if (this.currentVisualizationMode === 'timeline') {
-      this.renderLightweightTimeline();
-    }
+    // Simplified: no zoom controls needed for lightweight visualizer  
+    return;
   }
 
   renderLightweightPhrases() {
