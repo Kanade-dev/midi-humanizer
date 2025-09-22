@@ -138,25 +138,69 @@ class MIDIHumanizerApp {
       enhancedFeatures: {}
     };
 
-    // Analyze each track
+    // Combine all tracks for unified phrase analysis
+    const allNotes = [];
+    let melodyTrackNotes = [];
+    let melodyTrack = null;
+    
+    // Extract notes from all tracks and identify melody tracks
     for (let i = 0; i < midiData.tracks.length; i++) {
       const track = midiData.tracks[i];
+      const trackNotes = this.humanizer.extractNotesFromEvents(track);
       
-      // Enhanced phrase detection (2-1: フレーズ検知機能)
-      const phrases = this.phraseDetector.identifyPhraseBoundaries(track, true, settings.phraseDetectionMode);
+      // Determine if this is likely a melody track (heuristic: higher average pitch, more monophonic)
+      const avgPitch = trackNotes.length > 0 ? 
+        trackNotes.reduce((sum, n) => sum + n.pitch, 0) / trackNotes.length : 0;
+      const isLikelyMelody = avgPitch > 60 && this.isMonophonicTrack(trackNotes);
+      
+      if (isLikelyMelody && melodyTrackNotes.length === 0) {
+        // Use the first melody track as primary for phrase detection
+        melodyTrackNotes = trackNotes;
+        melodyTrack = track;
+      }
+      
+      allNotes.push(...trackNotes);
+    }
+    
+    // Sort all notes by time
+    allNotes.sort((a, b) => a.startTime - b.startTime);
+    
+    // Perform unified phrase detection prioritizing melody
+    let globalPhrases = [];
+    if (melodyTrack) {
+      // Use melody track for phrase detection
+      console.log('🎵 Using melody track for phrase detection');
+      globalPhrases = this.phraseDetector.identifyPhraseBoundaries(
+        melodyTrack, 
+        true, 
+        settings.phraseDetectionMode
+      );
+    } else {
+      // Use the first track as fallback
+      console.log('🎵 No melody track detected, using first track for phrase detection');
+      globalPhrases = this.phraseDetector.identifyPhraseBoundaries(
+        midiData.tracks[0], 
+        true, 
+        settings.phraseDetectionMode
+      );
+    }
+
+    // Analyze each track individually for other musical features
+    for (let i = 0; i < midiData.tracks.length; i++) {
+      const track = midiData.tracks[i];
       
       // Analyze chords for velocity variations (2-2: コードなどを検知し軽微なベロシティの揺らぎを加える)
       const chords = this.humanizer.analyzeChordProgression(track);
       
-      // Detect dynamic peaks (2-3: フレーズのピークなどを検知しダイナミクスを付ける)
-      const dynamics = this.analyzeDynamicPeaks(track, phrases);
+      // Detect dynamic peaks using global phrases (2-3: フレーズのピークなどを検知しダイナミクスを付ける)
+      const dynamics = this.analyzeDynamicPeaks(track, globalPhrases);
       
       // Other musical analysis
       const melody = this.humanizer.analyzeMelody(track);
       const rhythm = this.humanizer.analyzeRhythmicContext(track, settings.style);
 
       const trackAnalysis = {
-        phrasing: phrases,
+        phrasing: globalPhrases, // Use global phrases for all tracks
         chords: chords,
         melody: melody,
         rhythm: rhythm,
@@ -172,10 +216,10 @@ class MIDIHumanizerApp {
       };
 
       analysis.tracks.push(trackAnalysis);
-      
-      // Store phrases for visualization
-      analysis.phrases = analysis.phrases.concat(phrases);
     }
+    
+    // Store global phrases for visualization
+    analysis.phrases = globalPhrases;
 
     // Enhanced analysis features
     analysis.enhancedFeatures = {
@@ -183,10 +227,34 @@ class MIDIHumanizerApp {
       averagePhraseDuration: analysis.phrases.length > 0 ? 
         analysis.phrases.reduce((sum, p) => sum + (p.end - p.start), 0) / analysis.phrases.length / 1000 : 0,
       styleCharacteristics: this.getStyleCharacteristics(settings.style),
-      processingSettings: settings
+      processingSettings: settings,
+      analysisMethod: 'unified', // Indicate unified analysis was used
+      melodyTrackFound: melodyTrackNotes.length > 0
     };
 
     return analysis;
+  }
+
+  /**
+   * Determine if a track is monophonic (likely melody)
+   */
+  isMonophonicTrack(notes) {
+    if (notes.length < 4) return true; // Short tracks are considered monophonic
+    
+    // Check for simultaneous notes (polyphony)
+    let simultaneousNoteCount = 0;
+    for (let i = 0; i < notes.length - 1; i++) {
+      const currentNote = notes[i];
+      const nextNote = notes[i + 1];
+      
+      // If next note starts before current note ends, it's polyphonic
+      if (nextNote.startTime < currentNote.endTime) {
+        simultaneousNoteCount++;
+      }
+    }
+    
+    // If less than 20% of notes overlap, consider it monophonic
+    return (simultaneousNoteCount / notes.length) < 0.2;
   }
 
   /**

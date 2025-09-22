@@ -80,7 +80,6 @@ export class Visualizer {
     const modeControls = document.createElement('div');
     modeControls.innerHTML = `
       <button id="timelineMode" style="padding: 5px 10px; margin-right: 5px;">タイムライン表示</button>
-      <button id="phraseMode" style="padding: 5px 10px; margin-right: 5px;">フレーズ構造</button>
       <button id="comparisonMode" style="padding: 5px 10px;">ビフォー・アフター比較</button>
     `;
 
@@ -100,7 +99,6 @@ export class Visualizer {
     const zoomInBtn = document.getElementById('zoomIn');
     const resetZoomBtn = document.getElementById('resetZoom');
     const timelineModeBtn = document.getElementById('timelineMode');
-    const phraseModeBtn = document.getElementById('phraseMode');
     const comparisonModeBtn = document.getElementById('comparisonMode');
 
     if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => this.adjustZoom(-0.5));
@@ -108,7 +106,6 @@ export class Visualizer {
     if (resetZoomBtn) resetZoomBtn.addEventListener('click', () => this.resetZoom());
     
     if (timelineModeBtn) timelineModeBtn.addEventListener('click', () => this.setMode('timeline'));
-    if (phraseModeBtn) phraseModeBtn.addEventListener('click', () => this.setMode('phrase'));
     if (comparisonModeBtn) comparisonModeBtn.addEventListener('click', () => this.setMode('comparison'));
   }
 
@@ -145,7 +142,6 @@ export class Visualizer {
   updateModeButtons() {
     const buttons = {
       'timeline': document.getElementById('timelineMode'),
-      'phrase': document.getElementById('phraseMode'),
       'comparison': document.getElementById('comparisonMode')
     };
 
@@ -191,11 +187,11 @@ export class Visualizer {
       case 'timeline':
         this.renderTimeline();
         break;
-      case 'phrase':
-        this.renderPhraseStructure();
-        break;
       case 'comparison':
         this.renderComparison();
+        break;
+      default:
+        this.renderTimeline();
         break;
     }
 
