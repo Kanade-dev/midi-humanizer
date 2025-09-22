@@ -317,8 +317,10 @@ export class MIDIParser {
       } else if (event.status === 0xFF) {
         // Meta events
         data.push(0xFF, event.metaType);
-        data.push(...this.createVariableLength(event.data.length));
-        data.push(...event.data);
+        const eventData = event.data || [];
+        const eventDataArray = Array.isArray(eventData) ? eventData : [eventData];
+        data.push(...this.createVariableLength(eventDataArray.length));
+        data.push(...eventDataArray);
       }
     });
     
