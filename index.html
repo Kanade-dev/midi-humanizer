@@ -2,54 +2,77 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <title>MIDI Humanizer (Browser)</title>
+  <title>MIDI Humanizer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="ピアノMIDIファイルを人間的な動きに沿ってヒューマナイズするWebアプリケーション" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <main class="container">
-    <h1>MIDI Humanizer</h1>
-    <p class="subtitle">ブラウザ内でピアノMIDIを人間的な動きに沿ってヒューマナイズします</p>
+    <!-- Header Section -->
+    <header class="app-header">
+      <h1>MIDI Humanizer</h1>
+      <p class="subtitle">ピアノMIDIを人間的な表現でヒューマナイズ</p>
+      <p class="description">高度なフレーズ検知とコード解析により、自然で表現豊かな演奏を実現</p>
+    </header>
 
-    <form id="form">
-      <div class="field">
-        <label for="file">MIDIファイル</label>
-        <input type="file" id="file" name="file" accept=".mid,.midi" required />
-      </div>
+    <!-- Upload and Settings Section -->
+    <section class="upload-section">
+      <form id="form" class="humanizer-form">
+        <div class="form-row">
+          <div class="field">
+            <label for="file">MIDIファイル</label>
+            <input type="file" id="file" name="file" accept=".mid,.midi" required />
+          </div>
+        </div>
 
-      <div class="field">
-        <label for="style">スタイル</label>
-        <select id="style" name="style">
-          <option value="classical">Classical</option>
-          <option value="pop">Pop</option>
-          <option value="jazz">Jazz</option>
-        </select>
-      </div>
+        <div class="form-row">
+          <div class="field">
+            <label for="style">ジャンル選択</label>
+            <select id="style" name="style">
+              <option value="classical">Classical（クラシック）</option>
+              <option value="pop">Pop（ポップス）</option>
+              <option value="jazz">Jazz（ジャズ）</option>
+            </select>
+          </div>
 
-      <div class="field">
-        <label for="intensity">強度: <span id="intensityValue">0.5</span></label>
-        <input type="range" id="intensity" name="intensity" min="0" max="1" step="0.05" value="0.5" />
-      </div>
+          <div class="field">
+            <label for="intensity">ヒューマナイズ強度: <span id="intensityValue">0.5</span></label>
+            <input type="range" id="intensity" name="intensity" min="0" max="1" step="0.05" value="0.5" />
+          </div>
+        </div>
 
-      <div class="field">
-        <label for="seed">シード（任意・再現性）</label>
-        <input type="number" id="seed" name="seed" placeholder="例: 42" />
-      </div>
+        <div class="form-row">
+          <div class="field">
+            <label for="seed">シード値（再現性のため・任意）</label>
+            <input type="number" id="seed" name="seed" placeholder="例: 42" />
+          </div>
+        </div>
 
-      <button type="submit" id="submitBtn">Humanize</button>
-    </form>
+        <!-- Advanced settings will be inserted here by JavaScript -->
 
-    <div id="result" class="result hidden">
-      <!-- Integrated results section will be populated by JavaScript -->
-    </div>
+        <div class="form-actions">
+          <button type="submit" id="submitBtn" class="humanize-button">Humanize</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Status messages will be inserted here -->
+
+    <!-- Results will be inserted here by JavaScript -->
 
     <div id="error" class="error hidden"></div>
 
+    <!-- Footer -->
     <footer class="footer">
-      <p>すべての処理はブラウザ内で行われます。ファイルはサーバにアップロードされません。</p>
+      <div class="footer-content">
+        <p><strong>プライバシー重視:</strong> すべての処理はブラウザ内で完結し、ファイルがサーバーに送信されることはありません。</p>
+        <p><strong>対応ブラウザ:</strong> Chrome、Edge、Firefox、Safari（モダンブラウザ）</p>
+      </div>
     </footer>
   </main>
 
-  <script type="module" src="./script.js"></script>
+  <!-- Load the new modular application -->
+  <script type="module" src="./js/app.js"></script>
 </body>
 </html>
